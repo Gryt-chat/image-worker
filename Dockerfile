@@ -28,10 +28,12 @@ COPY --from=deps --chown=gryt:gryt /app/node_modules ./node_modules
 COPY --from=builder --chown=gryt:gryt /app/package.json ./package.json
 COPY --from=builder --chown=gryt:gryt /app/dist ./dist
 
+RUN mkdir -p /data && chown -R gryt:gryt /data
+
 USER gryt
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget -qO- http://localhost:8080/ || exit 1
+  CMD node -e "fetch('http://localhost:8080/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "dist/index.js"]
