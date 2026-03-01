@@ -121,11 +121,11 @@ function startHealthServer(): void {
   });
 }
 
-function main(): void {
+async function main(): Promise<void> {
   consola.info("[ImageWorker] Starting...");
   consola.info(`[ImageWorker] concurrency=${concurrency}, pollMs=${pollMs}`);
 
-  initStorage();
+  await initStorage();
   initDb();
 
   startHealthServer();
@@ -141,4 +141,7 @@ function main(): void {
   consola.info("[ImageWorker] Polling started");
 }
 
-main();
+main().catch((err) => {
+  consola.error("[ImageWorker] Fatal:", err);
+  process.exit(1);
+});

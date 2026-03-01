@@ -1,9 +1,4 @@
-import {
-  DeleteObjectCommand,
-  GetObjectCommand,
-  PutObjectCommand,
-  S3Client,
-} from "@aws-sdk/client-s3";
+import type { S3Client as S3ClientType } from "@aws-sdk/client-s3";
 import { existsSync } from "fs";
 import { mkdir, readFile, unlink, writeFile } from "fs/promises";
 import { dirname, join } from "path";
@@ -14,17 +9,24 @@ interface StorageBackend {
   deleteObject(bucket: string, key: string): Promise<void>;
 }
 
-// ── S3 backend ──────────────────────────────────────────────────────────────
+// ── S3 backend (lazy-loaded so the SDK is optional at runtime) ──────────────
 
-let s3: S3Client | null = null;
+let s3: S3ClientType | null = null;
+let s3Sdk: typeof import("@aws-sdk/client-s3") | null = null;
 
-function getS3(): S3Client {
+function getS3(): S3ClientType {
   if (!s3) throw new Error("S3 not initialized");
   return s3;
 }
 
+function getSdk(): typeof import("@aws-sdk/client-s3") {
+  if (!s3Sdk) throw new Error("S3 SDK not loaded");
+  return s3Sdk;
+}
+
 const s3Backend: StorageBackend = {
   async getObjectAsBuffer(bucket, key) {
+    const { GetObjectCommand } = getSdk();
     const res = await getS3().send(new GetObjectCommand({ Bucket: bucket, Key: key }));
     const body = res.Body;
     if (!body) throw new Error(`Empty S3 body for ${key}`);
@@ -33,12 +35,14 @@ const s3Backend: StorageBackend = {
   },
 
   async putObject(bucket, key, body, contentType) {
+    const { PutObjectCommand } = getSdk();
     await getS3().send(
       new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }),
     );
   },
 
   async deleteObject(bucket, key) {
+    const { DeleteObjectCommand } = getSdk();
     await getS3().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
   },
 };
@@ -96,13 +100,15 @@ function getBackend(): StorageBackend {
   return backend;
 }
 
-export function initStorage(): void {
+export async function initStorage(): Promise<void> {
   const storageType = (process.env.STORAGE_BACKEND || "s3").toLowerCase();
   if (storageType === "filesystem") {
     fsDataDir = process.env.DATA_DIR || "./data";
     backend = fsBackend;
   } else {
-    s3 = new S3Client({
+    const sdk = await import("@aws-sdk/client-s3");
+    s3Sdk = sdk;
+    s3 = new sdk.S3Client({
       region: process.env.S3_REGION || "auto",
       endpoint: process.env.S3_ENDPOINT,
       forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
