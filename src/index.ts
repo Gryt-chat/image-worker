@@ -1,17 +1,19 @@
 import consola from "consola";
 import http from "http";
+import sharp from "sharp";
 
 import {
   getImageJob,
   getUploadMaxBytes,
   initDb,
+  listAvatarThumbnails,
   listFilesMissingDominantColor,
   listQueuedImageJobIds,
   updateFileRecord,
   updateImageJobStatus,
 } from "./db";
 import { findDominantColor, processUploadedImage } from "./processImage";
-import { getObjectAsBuffer, initStorage } from "./storage";
+import { getObjectAsBuffer, initStorage, putObject } from "./storage";
 
 function clampInt(
   value: string | undefined,
@@ -34,6 +36,17 @@ let inFlight = 0;
 let processedCount = 0;
 let errorCount = 0;
 let colouredCount = 0;
+let rethumbedCount = 0;
+
+/**
+ * The avatar thumbnail size the server now writes.
+ *
+ * Kept in step with AVATAR_THUMB_PX in the server's upload route by hand. There
+ * is no shared package between these two repositories, and a constant that
+ * disagrees only makes this pass regenerate thumbnails forever or never — so if
+ * one moves, move the other.
+ */
+const AVATAR_THUMB_PX = 128;
 
 /**
  * Files this process has already failed to colour.
@@ -182,6 +195,69 @@ async function backfillColours(): Promise<void> {
   }
 }
 
+/**
+ * Bring old avatar thumbnails up to the size the client actually needs.
+ *
+ * They were written at 64px, which is smaller than most places that want one
+ * render at on a 2x screen — so the thumbnail existed but was too soft to use,
+ * and every avatar in the client fetched the full file instead. The server
+ * writes 128 now; this is the same upgrade for everything already uploaded, so
+ * nobody has to be asked to re-upload their avatar.
+ *
+ * Runs once per process. There is no column recording a thumbnail's size, so
+ * deciding means decoding it — a couple of kilobytes each, and the seen set
+ * keeps it to one pass.
+ */
+async function upgradeAvatarThumbnails(): Promise<void> {
+  const bucket = process.env.S3_BUCKET || "";
+
+  let avatars: Array<{
+    file_id: string;
+    s3_key: string;
+    thumbnail_key: string;
+    mime: string | null;
+  }>;
+  try {
+    avatars = listAvatarThumbnails(500);
+  } catch {
+    return;
+  }
+
+  for (const avatar of avatars) {
+    if (unreadable.has(avatar.file_id)) continue;
+
+    try {
+      const existing = await getObjectAsBuffer(bucket, avatar.thumbnail_key);
+      const meta = await sharp(existing, { failOn: "error" }).metadata();
+      if ((meta.width ?? 0) >= AVATAR_THUMB_PX) continue;
+
+      // From the stored avatar, not by upscaling the small thumbnail — that
+      // would produce something the right number of pixels and no sharper.
+      const source = await getObjectAsBuffer(bucket, avatar.s3_key);
+      const animated = avatar.mime === "image/gif" || avatar.mime === "image/webp";
+      const thumb = await sharp(source, {
+        failOn: "error",
+        ...(animated ? { pages: 1 } : {}),
+      })
+        .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
+        .avif({ quality: 50 })
+        .toBuffer();
+
+      await putObject(bucket, avatar.thumbnail_key, thumb, "image/avif");
+      rethumbedCount++;
+      consola.info(
+        `[ImageWorker] Rebuilt avatar thumbnail for ${avatar.file_id} at ${AVATAR_THUMB_PX}px (was ${meta.width ?? "?"}px)`,
+      );
+    } catch (err) {
+      unreadable.add(avatar.file_id);
+      consola.warn(
+        `[ImageWorker] Could not rebuild thumbnail for ${avatar.file_id}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+}
+
 function startHealthServer(): void {
   const server = http.createServer((_req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -190,6 +266,7 @@ function startHealthServer(): void {
         status: "ok",
         processed: processedCount,
         coloured: colouredCount,
+        rethumbed: rethumbedCount,
         errors: errorCount,
         inFlight,
       }),
@@ -225,6 +302,10 @@ async function main(): Promise<void> {
   }, backfillMs);
 
   consola.info(`[ImageWorker] Colour backfill every ${backfillMs}ms`);
+
+  void upgradeAvatarThumbnails().catch((e) =>
+    consola.warn("avatar thumbnail upgrade error", e),
+  );
 }
 
 main().catch((err) => {

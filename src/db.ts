@@ -171,6 +171,36 @@ export function listFilesMissingDominantColor(limit: number): ColourlessFile[] {
     .all(safeLimit) as ColourlessFile[];
 }
 
+export interface AvatarThumb {
+  file_id: string;
+  s3_key: string;
+  thumbnail_key: string;
+  mime: string | null;
+}
+
+/**
+ * Avatars that have a thumbnail, so it can be checked against the current size.
+ *
+ * There is nothing in the row that says how big the thumbnail is, so the caller
+ * decides by decoding it. That is cheap — an avatar thumbnail is a couple of
+ * kilobytes — and it is done once per file per process.
+ *
+ * Keyed off the s3_key prefix rather than a column because "is this an avatar"
+ * is not otherwise recorded. Chat attachments have thumbnails too and are left
+ * alone; their size was never the problem.
+ */
+export function listAvatarThumbnails(limit: number): AvatarThumb[] {
+  const d = getDb();
+  const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  return d
+    .prepare(
+      `SELECT file_id, s3_key, thumbnail_key, mime FROM files
+       WHERE thumbnail_key IS NOT NULL AND s3_key LIKE 'avatars/%'
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(safeLimit) as AvatarThumb[];
+}
+
 const DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 
 export function getUploadMaxBytes(): number {
