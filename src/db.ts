@@ -110,6 +110,7 @@ export function updateFileRecord(
     mime?: string;
     size?: number;
     thumbnail_key?: string | null;
+    thumbnail_px?: number | null;
     dominant_color?: string | null;
   },
 ): void {
@@ -131,6 +132,10 @@ export function updateFileRecord(
   if (updates.thumbnail_key !== undefined) {
     sets.push("thumbnail_key = ?");
     vals.push(updates.thumbnail_key);
+  }
+  if (updates.thumbnail_px !== undefined) {
+    sets.push("thumbnail_px = ?");
+    vals.push(updates.thumbnail_px);
   }
   if (updates.dominant_color !== undefined) {
     sets.push("dominant_color = ?");
@@ -169,6 +174,67 @@ export function listFilesMissingDominantColor(limit: number): ColourlessFile[] {
        ORDER BY created_at DESC LIMIT ?`,
     )
     .all(safeLimit) as ColourlessFile[];
+}
+
+export interface AvatarThumb {
+  file_id: string;
+  s3_key: string;
+  thumbnail_key: string;
+  mime: string | null;
+}
+
+/**
+ * The avatar thumbnail size this server writes, as the server itself reports it.
+ *
+ * Read rather than hardcoded. There is no package shared with the server, and
+ * the same constant written down in both repositories and kept in step by hand
+ * is a coupling that fails quietly: too low and the rebuild pass never runs, too
+ * high and it rebuilds every avatar on every start, forever. The server writes
+ * this on each of its own starts, so it is whatever that build actually uses.
+ *
+ * Null on a server older than the column. Nothing to rebuild towards, so the
+ * caller does nothing — which is the right answer, not a fallback guess.
+ */
+export function getAvatarThumbPx(): number | null {
+  const d = getDb();
+  try {
+    const row = d
+      .prepare("SELECT avatar_thumb_px FROM server_config WHERE id = 'config'")
+      .get() as { avatar_thumb_px: number | null } | undefined;
+    if (!row || row.avatar_thumb_px == null) return null;
+    const n = Number(row.avatar_thumb_px);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Avatars whose thumbnail is smaller than the one this server writes today.
+ *
+ * `thumbnail_px` says how big each one is, so the query decides rather than the
+ * caller decoding every thumbnail to find out. Null means it was made before
+ * the column existed and its size is unknown, which is treated as "rebuild" —
+ * those are exactly the 64px ones this pass is for.
+ *
+ * Keyed off the s3_key prefix because "is this an avatar" is not otherwise
+ * recorded. Chat attachments have thumbnails too and are left alone; their size
+ * was never the problem.
+ */
+export function listUndersizedAvatarThumbnails(
+  targetPx: number,
+  limit: number,
+): AvatarThumb[] {
+  const d = getDb();
+  const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  return d
+    .prepare(
+      `SELECT file_id, s3_key, thumbnail_key, mime FROM files
+       WHERE thumbnail_key IS NOT NULL AND s3_key LIKE 'avatars/%'
+         AND (thumbnail_px IS NULL OR thumbnail_px < ?)
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(targetPx, safeLimit) as AvatarThumb[];
 }
 
 const DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
