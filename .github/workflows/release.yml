@@ -92,13 +92,26 @@ jobs:
           yarn install --frozen-lockfile
           yarn build
 
-      - name: Bump version
+      - name: Determine version
         id: version
         shell: bash
         run: |
           set -euo pipefail
 
-          CURRENT_VERSION="$(node -p "require('./package.json').version")"
+          # The tag is the source of truth, not package.json. main is a
+          # protected branch — "changes must be made through a pull request" —
+          # so a release cannot push a version-bump commit to it, and the
+          # default GITHUB_TOKEN is not an admin and cannot bypass that. Tags
+          # have no such rule, so the release tags and never touches the branch.
+          #
+          # package.json's version is therefore decorative here. Nothing reads
+          # it: the package is private, never published to npm, and nothing in
+          # src/ looks it up.
+          CURRENT_VERSION="$(git tag --list 'v*' --sort=-v:refname | head -n1 | sed 's/^v//')"
+
+          if [[ -z "$CURRENT_VERSION" ]]; then
+            CURRENT_VERSION="$(node -p "require('./package.json').version")"
+          fi
           BUMP="${{ github.event.inputs.bump }}"
           CUSTOM_VERSION="${{ github.event.inputs.custom_version }}"
 
@@ -150,12 +163,7 @@ jobs:
             exit 1
           fi
 
-          npm version "$NEW_VERSION" --no-git-tag-version
-
-          git add package.json
-          git commit -m "release: v$NEW_VERSION (${{ steps.channel.outputs.channel }})"
           git tag "v$NEW_VERSION"
-          git push origin HEAD
           git push origin "v$NEW_VERSION"
 
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
