@@ -131,11 +131,12 @@ function tick(): void {
 /**
  * Give a colour to images that have one missing.
  *
- * The job queue only covers chat uploads. Avatars are resized by the server
- * inline and never queued, and everything uploaded before `dominant_color`
- * existed has a null regardless of how it arrived — so without this pass, a
- * server owner would have to ask every member to re-upload their avatar before
- * the tint that reads this column did anything.
+ * The job queue covers whatever is posted to /api/uploads — chat attachments
+ * and webhook avatars. A user's own avatar is not: it has a separate route
+ * that resizes it inline and queues nothing. Everything uploaded before
+ * `dominant_color` existed has a null regardless of how it arrived. So without
+ * this pass, a server owner would have to ask every member to re-upload their
+ * avatar before the tint that reads this column did anything.
  *
  * Deliberately the lowest-priority thing here: it yields the whole sweep to
  * real jobs, writes only the colour, and never touches the stored object or

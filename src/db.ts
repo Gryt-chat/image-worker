@@ -151,8 +151,9 @@ export interface ColourlessFile {
  * Images that have no dominant colour yet.
  *
  * Two kinds end up here. Anything uploaded before the column existed, and
- * anything that never produces an image job at all — avatars are compressed
- * inline by the server rather than queued, so the job loop never sees one.
+ * anything that never produces an image job at all — a user avatar goes to its
+ * own /api/uploads/avatar route, which resizes inline and queues nothing, so
+ * the job loop never sees one.
  *
  * Newest first: a colour is only ever looked at for a file someone is still
  * using, and on a server with years of attachments the recent end is the part
