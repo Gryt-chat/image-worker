@@ -8,9 +8,47 @@ export interface ProcessResult {
   newMime: string | null;
   newSize: number | null;
   thumbKey: string | null;
+  /** #rrggbb, or null if the image has no readable colour. */
+  dominantColor: string | null;
 }
 
 const MAX_INPUT_PIXELS = 100_000_000;
+
+function toHex(value: number): string {
+  return Math.max(0, Math.min(255, Math.round(value)))
+    .toString(16)
+    .padStart(2, "0");
+}
+
+/**
+ * The image's dominant colour, for tinting surfaces that stand in for it —
+ * a voice tile behind someone's avatar, for instance.
+ *
+ * Computed here because this worker is already decoding the image to build a
+ * thumbnail, so it costs one extra pass over an already-loaded buffer and
+ * happens once per upload rather than once per person looking at it.
+ *
+ * Never throws: a colour is a nicety, and failing to find one must not fail
+ * the upload that carries it.
+ */
+async function findDominantColor(
+  buffer: Buffer,
+  animated: boolean,
+): Promise<string | null> {
+  try {
+    const { dominant } = await sharp(buffer, {
+      failOn: "error",
+      limitInputPixels: MAX_INPUT_PIXELS,
+      ...(animated ? { pages: 1 } : {}),
+    }).stats();
+
+    if (!dominant) return null;
+
+    return `#${toHex(dominant.r)}${toHex(dominant.g)}${toHex(dominant.b)}`;
+  } catch {
+    return null;
+  }
+}
 
 export async function processUploadedImage(
   bucket: string,
@@ -76,12 +114,15 @@ export async function processUploadedImage(
     await putObject(bucket, thumbKey, thumb, "image/avif");
   }
 
+  const dominantColor = await findDominantColor(rawBuffer, isPotentiallyAnimated);
+
   return {
     compressed: newKey !== null,
     newKey,
     newMime,
     newSize,
     thumbKey,
+    dominantColor,
   };
 }
 

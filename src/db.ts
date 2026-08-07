@@ -105,7 +105,13 @@ export function updateImageJobStatus(input: {
 
 export function updateFileRecord(
   fileId: string,
-  updates: { s3_key?: string; mime?: string; size?: number; thumbnail_key?: string | null },
+  updates: {
+    s3_key?: string;
+    mime?: string;
+    size?: number;
+    thumbnail_key?: string | null;
+    dominant_color?: string | null;
+  },
 ): void {
   const d = getDb();
   const sets: string[] = [];
@@ -125,6 +131,10 @@ export function updateFileRecord(
   if (updates.thumbnail_key !== undefined) {
     sets.push("thumbnail_key = ?");
     vals.push(updates.thumbnail_key);
+  }
+  if (updates.dominant_color !== undefined) {
+    sets.push("dominant_color = ?");
+    vals.push(updates.dominant_color);
   }
   if (sets.length === 0) return;
   vals.push(fileId);

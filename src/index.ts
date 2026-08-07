@@ -50,7 +50,13 @@ async function runOne(jobId: string): Promise<void> {
       maxBytes,
     );
 
-    const updates: { s3_key?: string; mime?: string; size?: number; thumbnail_key?: string | null } = {};
+    const updates: {
+      s3_key?: string;
+      mime?: string;
+      size?: number;
+      thumbnail_key?: string | null;
+      dominant_color?: string | null;
+    } = {};
     if (result.compressed && result.newKey && result.newMime && result.newSize !== null) {
       updates.s3_key = result.newKey;
       updates.mime = result.newMime;
@@ -58,6 +64,9 @@ async function runOne(jobId: string): Promise<void> {
     }
     if (result.thumbKey) {
       updates.thumbnail_key = result.thumbKey;
+    }
+    if (result.dominantColor) {
+      updates.dominant_color = result.dominantColor;
     }
 
     if (Object.keys(updates).length > 0) {
