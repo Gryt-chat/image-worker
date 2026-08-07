@@ -6,7 +6,8 @@ import {
   getImageJob,
   getUploadMaxBytes,
   initDb,
-  listAvatarThumbnails,
+  getAvatarThumbPx,
+  listUndersizedAvatarThumbnails,
   listFilesMissingDominantColor,
   listQueuedImageJobIds,
   updateFileRecord,
@@ -38,15 +39,7 @@ let errorCount = 0;
 let colouredCount = 0;
 let rethumbedCount = 0;
 
-/**
- * The avatar thumbnail size the server now writes.
- *
- * Kept in step with AVATAR_THUMB_PX in the server's upload route by hand. There
- * is no shared package between these two repositories, and a constant that
- * disagrees only makes this pass regenerate thumbnails forever or never — so if
- * one moves, move the other.
- */
-const AVATAR_THUMB_PX = 128;
+
 
 /**
  * Files this process has already failed to colour.
@@ -196,20 +189,28 @@ async function backfillColours(): Promise<void> {
 }
 
 /**
- * Bring old avatar thumbnails up to the size the client actually needs.
+ * Bring old avatar thumbnails up to the size the server writes today.
  *
  * They were written at 64px, which is smaller than most places that want one
  * render at on a 2x screen — so the thumbnail existed but was too soft to use,
- * and every avatar in the client fetched the full file instead. The server
- * writes 128 now; this is the same upgrade for everything already uploaded, so
- * nobody has to be asked to re-upload their avatar.
+ * and every avatar in the client fetched the full file instead. Without this,
+ * that stays true for every existing member until they change their avatar.
  *
- * Runs once per process. There is no column recording a thumbnail's size, so
- * deciding means decoding it — a couple of kilobytes each, and the seen set
- * keeps it to one pass.
+ * The target comes from the server, not from a constant here. Nothing else
+ * would let these two repositories disagree safely.
+ *
+ * Runs once per process, alongside the colour backfill and for the same reason.
  */
 async function upgradeAvatarThumbnails(): Promise<void> {
   const bucket = process.env.S3_BUCKET || "";
+
+  const targetPx = getAvatarThumbPx();
+  if (!targetPx) {
+    consola.info(
+      "[ImageWorker] Server publishes no avatar thumbnail size — skipping thumbnail upgrade",
+    );
+    return;
+  }
 
   let avatars: Array<{
     file_id: string;
@@ -218,7 +219,7 @@ async function upgradeAvatarThumbnails(): Promise<void> {
     mime: string | null;
   }>;
   try {
-    avatars = listAvatarThumbnails(500);
+    avatars = listUndersizedAvatarThumbnails(targetPx, 500);
   } catch {
     return;
   }
@@ -227,26 +228,23 @@ async function upgradeAvatarThumbnails(): Promise<void> {
     if (unreadable.has(avatar.file_id)) continue;
 
     try {
-      const existing = await getObjectAsBuffer(bucket, avatar.thumbnail_key);
-      const meta = await sharp(existing, { failOn: "error" }).metadata();
-      if ((meta.width ?? 0) >= AVATAR_THUMB_PX) continue;
-
-      // From the stored avatar, not by upscaling the small thumbnail — that
-      // would produce something the right number of pixels and no sharper.
+      // From the stored avatar, not by upscaling the old thumbnail — that would
+      // produce the right number of pixels and no more detail.
       const source = await getObjectAsBuffer(bucket, avatar.s3_key);
       const animated = avatar.mime === "image/gif" || avatar.mime === "image/webp";
       const thumb = await sharp(source, {
         failOn: "error",
         ...(animated ? { pages: 1 } : {}),
       })
-        .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
+        .resize({ width: targetPx, height: targetPx, fit: "cover" })
         .avif({ quality: 50 })
         .toBuffer();
 
       await putObject(bucket, avatar.thumbnail_key, thumb, "image/avif");
+      updateFileRecord(avatar.file_id, { thumbnail_px: targetPx });
       rethumbedCount++;
       consola.info(
-        `[ImageWorker] Rebuilt avatar thumbnail for ${avatar.file_id} at ${AVATAR_THUMB_PX}px (was ${meta.width ?? "?"}px)`,
+        `[ImageWorker] Rebuilt avatar thumbnail for ${avatar.file_id} at ${targetPx}px`,
       );
     } catch (err) {
       unreadable.add(avatar.file_id);
