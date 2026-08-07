@@ -105,7 +105,13 @@ export function updateImageJobStatus(input: {
 
 export function updateFileRecord(
   fileId: string,
-  updates: { s3_key?: string; mime?: string; size?: number; thumbnail_key?: string | null },
+  updates: {
+    s3_key?: string;
+    mime?: string;
+    size?: number;
+    thumbnail_key?: string | null;
+    dominant_color?: string | null;
+  },
 ): void {
   const d = getDb();
   const sets: string[] = [];
@@ -126,9 +132,43 @@ export function updateFileRecord(
     sets.push("thumbnail_key = ?");
     vals.push(updates.thumbnail_key);
   }
+  if (updates.dominant_color !== undefined) {
+    sets.push("dominant_color = ?");
+    vals.push(updates.dominant_color);
+  }
   if (sets.length === 0) return;
   vals.push(fileId);
   d.prepare(`UPDATE files SET ${sets.join(", ")} WHERE file_id = ?`).run(...vals);
+}
+
+export interface ColourlessFile {
+  file_id: string;
+  s3_key: string;
+  mime: string | null;
+}
+
+/**
+ * Images that have no dominant colour yet.
+ *
+ * Two kinds end up here. Anything uploaded before the column existed, and
+ * anything that never produces an image job at all — a user avatar goes to its
+ * own /api/uploads/avatar route, which resizes inline and queues nothing, so
+ * the job loop never sees one.
+ *
+ * Newest first: a colour is only ever looked at for a file someone is still
+ * using, and on a server with years of attachments the recent end is the part
+ * that pays for itself.
+ */
+export function listFilesMissingDominantColor(limit: number): ColourlessFile[] {
+  const d = getDb();
+  const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+  return d
+    .prepare(
+      `SELECT file_id, s3_key, mime FROM files
+       WHERE dominant_color IS NULL AND mime LIKE 'image/%'
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(safeLimit) as ColourlessFile[];
 }
 
 const DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;

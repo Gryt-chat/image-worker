@@ -5,12 +5,13 @@ import {
   getImageJob,
   getUploadMaxBytes,
   initDb,
+  listFilesMissingDominantColor,
   listQueuedImageJobIds,
   updateFileRecord,
   updateImageJobStatus,
 } from "./db";
-import { processUploadedImage } from "./processImage";
-import { initStorage } from "./storage";
+import { findDominantColor, processUploadedImage } from "./processImage";
+import { getObjectAsBuffer, initStorage } from "./storage";
 
 function clampInt(
   value: string | undefined,
@@ -26,10 +27,24 @@ function clampInt(
 const concurrency = clampInt(process.env.IMAGE_WORKER_CONCURRENCY, 2, 1, 8);
 const pollMs = clampInt(process.env.IMAGE_WORKER_POLL_MS, 1000, 250, 10_000);
 const healthPort = clampInt(process.env.HEALTH_PORT, 8080, 1, 65535);
+const backfillMs = clampInt(process.env.IMAGE_WORKER_BACKFILL_MS, 60_000, 5_000, 3_600_000);
+const backfillBatch = clampInt(process.env.IMAGE_WORKER_BACKFILL_BATCH, 20, 1, 200);
 
 let inFlight = 0;
 let processedCount = 0;
 let errorCount = 0;
+let colouredCount = 0;
+
+/**
+ * Files this process has already failed to colour.
+ *
+ * The backfill query selects on `dominant_color IS NULL`, so a file whose
+ * object is missing from storage matches forever and would be re-fetched every
+ * sweep. Remembering the failures keeps that to once per file per process; a
+ * restart retries, which is the right amount of persistence for something that
+ * is usually a transient storage problem.
+ */
+const unreadable = new Set<string>();
 
 async function runOne(jobId: string): Promise<void> {
   const bucket = process.env.S3_BUCKET || "";
@@ -50,7 +65,13 @@ async function runOne(jobId: string): Promise<void> {
       maxBytes,
     );
 
-    const updates: { s3_key?: string; mime?: string; size?: number; thumbnail_key?: string | null } = {};
+    const updates: {
+      s3_key?: string;
+      mime?: string;
+      size?: number;
+      thumbnail_key?: string | null;
+      dominant_color?: string | null;
+    } = {};
     if (result.compressed && result.newKey && result.newMime && result.newSize !== null) {
       updates.s3_key = result.newKey;
       updates.mime = result.newMime;
@@ -58,6 +79,9 @@ async function runOne(jobId: string): Promise<void> {
     }
     if (result.thumbKey) {
       updates.thumbnail_key = result.thumbKey;
+    }
+    if (result.dominantColor) {
+      updates.dominant_color = result.dominantColor;
     }
 
     if (Object.keys(updates).length > 0) {
@@ -104,6 +128,60 @@ function tick(): void {
   }
 }
 
+/**
+ * Give a colour to images that have one missing.
+ *
+ * The job queue covers whatever is posted to /api/uploads — chat attachments
+ * and webhook avatars. A user's own avatar is not: it has a separate route
+ * that resizes it inline and queues nothing. Everything uploaded before
+ * `dominant_color` existed has a null regardless of how it arrived. So without
+ * this pass, a server owner would have to ask every member to re-upload their
+ * avatar before the tint that reads this column did anything.
+ *
+ * Deliberately the lowest-priority thing here: it yields the whole sweep to
+ * real jobs, writes only the colour, and never touches the stored object or
+ * the thumbnail. Re-deriving those is the job path's business, and doing it
+ * from here would replace artefacts the server made on purpose.
+ */
+async function backfillColours(): Promise<void> {
+  if (inFlight >= concurrency) return;
+
+  let pending: Array<{ file_id: string; s3_key: string; mime: string | null }>;
+  try {
+    pending = listFilesMissingDominantColor(backfillBatch);
+  } catch {
+    return;
+  }
+
+  const bucket = process.env.S3_BUCKET || "";
+
+  for (const file of pending) {
+    if (unreadable.has(file.file_id)) continue;
+    if (inFlight >= concurrency) return;
+
+    try {
+      const buffer = await getObjectAsBuffer(bucket, file.s3_key);
+      const animated = file.mime === "image/gif" || file.mime === "image/webp";
+      const colour = await findDominantColor(buffer, animated);
+
+      if (!colour) {
+        unreadable.add(file.file_id);
+        continue;
+      }
+
+      updateFileRecord(file.file_id, { dominant_color: colour });
+      colouredCount++;
+      consola.info(`[ImageWorker] Backfilled colour ${colour} for file ${file.file_id}`);
+    } catch (err) {
+      unreadable.add(file.file_id);
+      consola.warn(
+        `[ImageWorker] Could not colour ${file.file_id}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+}
+
 function startHealthServer(): void {
   const server = http.createServer((_req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -111,6 +189,7 @@ function startHealthServer(): void {
       JSON.stringify({
         status: "ok",
         processed: processedCount,
+        coloured: colouredCount,
         errors: errorCount,
         inFlight,
       }),
@@ -139,6 +218,13 @@ async function main(): Promise<void> {
   }, pollMs);
 
   consola.info("[ImageWorker] Polling started");
+
+  void backfillColours().catch((e) => consola.warn("backfill error", e));
+  setInterval(() => {
+    void backfillColours().catch((e) => consola.warn("backfill error", e));
+  }, backfillMs);
+
+  consola.info(`[ImageWorker] Colour backfill every ${backfillMs}ms`);
 }
 
 main().catch((err) => {
