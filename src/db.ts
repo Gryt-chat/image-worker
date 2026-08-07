@@ -141,6 +141,35 @@ export function updateFileRecord(
   d.prepare(`UPDATE files SET ${sets.join(", ")} WHERE file_id = ?`).run(...vals);
 }
 
+export interface ColourlessFile {
+  file_id: string;
+  s3_key: string;
+  mime: string | null;
+}
+
+/**
+ * Images that have no dominant colour yet.
+ *
+ * Two kinds end up here. Anything uploaded before the column existed, and
+ * anything that never produces an image job at all — avatars are compressed
+ * inline by the server rather than queued, so the job loop never sees one.
+ *
+ * Newest first: a colour is only ever looked at for a file someone is still
+ * using, and on a server with years of attachments the recent end is the part
+ * that pays for itself.
+ */
+export function listFilesMissingDominantColor(limit: number): ColourlessFile[] {
+  const d = getDb();
+  const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+  return d
+    .prepare(
+      `SELECT file_id, s3_key, mime FROM files
+       WHERE dominant_color IS NULL AND mime LIKE 'image/%'
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(safeLimit) as ColourlessFile[];
+}
+
 const DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 
 export function getUploadMaxBytes(): number {

@@ -31,7 +31,7 @@ function toHex(value: number): string {
  * Never throws: a colour is a nicety, and failing to find one must not fail
  * the upload that carries it.
  */
-async function findDominantColor(
+export async function findDominantColor(
   buffer: Buffer,
   animated: boolean,
 ): Promise<string | null> {
