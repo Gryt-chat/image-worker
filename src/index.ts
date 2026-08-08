@@ -36,14 +36,22 @@ const backfillBatch = clampInt(process.env.IMAGE_WORKER_BACKFILL_BATCH, 20, 1, 2
 /**
  * What this worker is, so a server can say so.
  *
- * Read from the package.json beside the build rather than baked in at compile
- * time, because that file is what gets copied next to dist/ in every way this
- * ships — the Docker image and the embedded bundle both carry it. Falls back to
- * an explicit "unknown" rather than a made-up number: a wrong version is worse
- * than no version, since the whole point is telling someone whether they are
- * out of date.
+ * IMAGE_WORKER_VERSION first, because the tag is the source of truth here and
+ * package.json is not: release.yml versions from `git tag` and never bumps the
+ * file — it says so in a comment, and says nothing in src/ reads it. Reading it
+ * anyway would have reported 1.0.6 for a worker released as 1.2.0, which is
+ * worse than reporting nothing, since the entire point is telling someone
+ * whether they are behind.
+ *
+ * So the Docker image is stamped at build time and the embedded bundle gets its
+ * copied package.json rewritten with the real version. package.json stays as
+ * the fallback for someone running from a checkout, and "unknown" is the answer
+ * when neither can be trusted.
  */
 function readVersion(): string {
+  const stamped = process.env.IMAGE_WORKER_VERSION?.trim();
+  if (stamped) return stamped.replace(/^v/, "");
+
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const pkg = require("../package.json") as { version?: unknown };
