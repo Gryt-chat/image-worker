@@ -1,11 +1,15 @@
-import Database from "better-sqlite3";
 import consola from "consola";
 import { existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
+import {
+  DatabaseSync,
+  type SQLInputValue,
+  type SQLOutputValue,
+} from "node:sqlite";
 
-let db: Database.Database | null = null;
+let db: DatabaseSync | null = null;
 
-function getDb(): Database.Database {
+function getDb(): DatabaseSync {
   if (!db) throw new Error("DB not initialized. Call initDb() first.");
   return db;
 }
@@ -17,9 +21,15 @@ export function initDb(): void {
   const dir = dirname(dbPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-  db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("busy_timeout = 5000");
+  db = new DatabaseSync(dbPath);
+
+  // node:sqlite has no pragma() helper, so these go through exec(). Same
+  // statements better-sqlite3 was issuing, in the same order.
+  //
+  // WAL matters more here than it looks: the server holds this file open at the
+  // same time, and the worker writes to it from a second process.
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA busy_timeout = 5000");
 
   consola.info(`[DB] Connected to SQLite (${dbPath})`);
 }
@@ -45,6 +55,17 @@ function toIso(d: Date): string {
 function fromIso(s: string | null | undefined): Date {
   if (!s) return new Date(0);
   return new Date(s);
+}
+
+/**
+ * node:sqlite types every row as `Record<string, SQLOutputValue>`, which does
+ * not structurally overlap a named interface, so TypeScript rejects a direct
+ * cast to one. The queries below select exactly the columns their interface
+ * names, so the conversion is sound — this keeps the one unchecked step in a
+ * single place rather than repeating `as unknown as` at each call site.
+ */
+function rowsAs<T>(rows: Record<string, SQLOutputValue>[]): T[] {
+  return rows as unknown as T[];
 }
 
 function mapRow(row: Record<string, unknown>): ImageJobRecord {
@@ -92,7 +113,7 @@ export function updateImageJobStatus(input: {
   const now = toIso(new Date());
 
   const sets: string[] = ["status = ?", "updated_at = ?"];
-  const vals: unknown[] = [input.status, now];
+  const vals: SQLInputValue[] = [input.status, now];
 
   if (input.error_message !== undefined) {
     sets.push("error_message = ?");
@@ -116,7 +137,7 @@ export function updateFileRecord(
 ): void {
   const d = getDb();
   const sets: string[] = [];
-  const vals: unknown[] = [];
+  const vals: SQLInputValue[] = [];
   if (updates.s3_key !== undefined) {
     sets.push("s3_key = ?");
     vals.push(updates.s3_key);
@@ -167,13 +188,15 @@ export interface ColourlessFile {
 export function listFilesMissingDominantColor(limit: number): ColourlessFile[] {
   const d = getDb();
   const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
-  return d
-    .prepare(
-      `SELECT file_id, s3_key, mime FROM files
+  return rowsAs<ColourlessFile>(
+    d
+      .prepare(
+        `SELECT file_id, s3_key, mime FROM files
        WHERE dominant_color IS NULL AND mime LIKE 'image/%'
        ORDER BY created_at DESC LIMIT ?`,
-    )
-    .all(safeLimit) as ColourlessFile[];
+      )
+      .all(safeLimit),
+  );
 }
 
 export interface AvatarThumb {
@@ -227,14 +250,16 @@ export function listUndersizedAvatarThumbnails(
 ): AvatarThumb[] {
   const d = getDb();
   const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
-  return d
-    .prepare(
-      `SELECT file_id, s3_key, thumbnail_key, mime FROM files
+  return rowsAs<AvatarThumb>(
+    d
+      .prepare(
+        `SELECT file_id, s3_key, thumbnail_key, mime FROM files
        WHERE thumbnail_key IS NOT NULL AND s3_key LIKE 'avatars/%'
          AND (thumbnail_px IS NULL OR thumbnail_px < ?)
        ORDER BY created_at DESC LIMIT ?`,
-    )
-    .all(targetPx, safeLimit) as AvatarThumb[];
+      )
+      .all(targetPx, safeLimit),
+  );
 }
 
 const DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
