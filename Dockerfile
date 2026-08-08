@@ -25,6 +25,12 @@ COPY --from=builder --chown=gryt:gryt /app/dist ./dist
 
 RUN mkdir -p /data && chown -R gryt:gryt /data
 
+# The tag is the source of truth for a release, and package.json is never
+# bumped (see release.yml), so the version has to be handed in at build time.
+# Without it the worker reports whatever stale number package.json still holds.
+ARG IMAGE_WORKER_VERSION=""
+ENV IMAGE_WORKER_VERSION=$IMAGE_WORKER_VERSION
+
 USER gryt
 EXPOSE 8080
 

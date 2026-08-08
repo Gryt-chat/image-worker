@@ -33,6 +33,36 @@ const healthPort = clampInt(process.env.HEALTH_PORT, 8080, 1, 65535);
 const backfillMs = clampInt(process.env.IMAGE_WORKER_BACKFILL_MS, 60_000, 5_000, 3_600_000);
 const backfillBatch = clampInt(process.env.IMAGE_WORKER_BACKFILL_BATCH, 20, 1, 200);
 
+/**
+ * What this worker is, so a server can say so.
+ *
+ * IMAGE_WORKER_VERSION first, because the tag is the source of truth here and
+ * package.json is not: release.yml versions from `git tag` and never bumps the
+ * file — it says so in a comment, and says nothing in src/ reads it. Reading it
+ * anyway would have reported 1.0.6 for a worker released as 1.2.0, which is
+ * worse than reporting nothing, since the entire point is telling someone
+ * whether they are behind.
+ *
+ * So the Docker image is stamped at build time and the embedded bundle gets its
+ * copied package.json rewritten with the real version. package.json stays as
+ * the fallback for someone running from a checkout, and "unknown" is the answer
+ * when neither can be trusted.
+ */
+function readVersion(): string {
+  const stamped = process.env.IMAGE_WORKER_VERSION?.trim();
+  if (stamped) return stamped.replace(/^v/, "");
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const pkg = require("../package.json") as { version?: unknown };
+    return typeof pkg.version === "string" ? pkg.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+const version = readVersion();
+
 let inFlight = 0;
 let processedCount = 0;
 let errorCount = 0;
@@ -256,12 +286,32 @@ async function upgradeAvatarThumbnails(): Promise<void> {
   }
 }
 
+/**
+ * Health, and now version.
+ *
+ * /version is its own route so a caller that only wants to know what is running
+ * does not have to care about the counters, and so the answer stays the same
+ * shape if health ever grows. Everything else keeps answering health, which is
+ * what it did before — the container healthcheck hits /.
+ *
+ * The version is in the health payload too. A worker that answers health but
+ * cannot say what it is would be a worse answer than either alone.
+ */
 function startHealthServer(): void {
-  const server = http.createServer((_req, res) => {
+  const server = http.createServer((req, res) => {
+    const path = (req.url || "/").split("?")[0];
+
     res.writeHead(200, { "Content-Type": "application/json" });
+
+    if (path === "/version") {
+      res.end(JSON.stringify({ name: "image-worker", version }));
+      return;
+    }
+
     res.end(
       JSON.stringify({
         status: "ok",
+        version,
         processed: processedCount,
         coloured: colouredCount,
         rethumbed: rethumbedCount,
@@ -276,7 +326,7 @@ function startHealthServer(): void {
 }
 
 async function main(): Promise<void> {
-  consola.info("[ImageWorker] Starting...");
+  consola.info(`[ImageWorker] Starting v${version}...`);
   consola.info(`[ImageWorker] concurrency=${concurrency}, pollMs=${pollMs}`);
 
   await initStorage();
