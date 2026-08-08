@@ -33,6 +33,28 @@ const healthPort = clampInt(process.env.HEALTH_PORT, 8080, 1, 65535);
 const backfillMs = clampInt(process.env.IMAGE_WORKER_BACKFILL_MS, 60_000, 5_000, 3_600_000);
 const backfillBatch = clampInt(process.env.IMAGE_WORKER_BACKFILL_BATCH, 20, 1, 200);
 
+/**
+ * What this worker is, so a server can say so.
+ *
+ * Read from the package.json beside the build rather than baked in at compile
+ * time, because that file is what gets copied next to dist/ in every way this
+ * ships — the Docker image and the embedded bundle both carry it. Falls back to
+ * an explicit "unknown" rather than a made-up number: a wrong version is worse
+ * than no version, since the whole point is telling someone whether they are
+ * out of date.
+ */
+function readVersion(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const pkg = require("../package.json") as { version?: unknown };
+    return typeof pkg.version === "string" ? pkg.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+const version = readVersion();
+
 let inFlight = 0;
 let processedCount = 0;
 let errorCount = 0;
@@ -256,12 +278,32 @@ async function upgradeAvatarThumbnails(): Promise<void> {
   }
 }
 
+/**
+ * Health, and now version.
+ *
+ * /version is its own route so a caller that only wants to know what is running
+ * does not have to care about the counters, and so the answer stays the same
+ * shape if health ever grows. Everything else keeps answering health, which is
+ * what it did before — the container healthcheck hits /.
+ *
+ * The version is in the health payload too. A worker that answers health but
+ * cannot say what it is would be a worse answer than either alone.
+ */
 function startHealthServer(): void {
-  const server = http.createServer((_req, res) => {
+  const server = http.createServer((req, res) => {
+    const path = (req.url || "/").split("?")[0];
+
     res.writeHead(200, { "Content-Type": "application/json" });
+
+    if (path === "/version") {
+      res.end(JSON.stringify({ name: "image-worker", version }));
+      return;
+    }
+
     res.end(
       JSON.stringify({
         status: "ok",
+        version,
         processed: processedCount,
         coloured: colouredCount,
         rethumbed: rethumbedCount,
@@ -276,7 +318,7 @@ function startHealthServer(): void {
 }
 
 async function main(): Promise<void> {
-  consola.info("[ImageWorker] Starting...");
+  consola.info(`[ImageWorker] Starting v${version}...`);
   consola.info(`[ImageWorker] concurrency=${concurrency}, pollMs=${pollMs}`);
 
   await initStorage();
