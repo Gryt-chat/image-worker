@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/Gryt-chat/client/main/public/logo.svg" width="80" alt="Gryt logo" />
   <h1>Gryt Image Worker</h1>
-  <p>Background image processing worker for the <a href="https://github.com/Gryt-chat/gryt">Gryt</a> voice &amp; video platform.<br />Compresses uploads to AVIF, generates thumbnails, and updates the shared SQLite database &mdash; powered by <a href="https://sharp.pixelplumbing.com/">Sharp</a>.</p>
+  <p>Background image processing worker for the <a href="https://github.com/Gryt-chat/gryt">Gryt</a> voice &amp; video platform.<br />Compresses uploads to AVIF, generates thumbnails and updates the shared SQLite database, using <a href="https://sharp.pixelplumbing.com/">Sharp</a>.</p>
 </div>
 
 <br />
@@ -14,6 +14,14 @@ docker run -v gryt-data:/data --env-file .env ghcr.io/gryt-chat/image-worker:lat
 ```
 
 Browse tags at [ghcr.io/gryt-chat/image-worker](https://github.com/Gryt-chat/image-worker/pkgs/container/image-worker).
+
+## It parses files strangers uploaded
+
+Worth saying out loud, because compressing an avatar sounds like a utility job.
+This is the process that hands attacker-controlled bytes to an image decoder, so
+it is a review-required path in
+[the AI policy](https://docs.gryt.chat/docs/guide/ai) and changes here get read
+line by line.
 
 ## Configuration
 
@@ -31,7 +39,7 @@ Browse tags at [ghcr.io/gryt-chat/image-worker](https://github.com/Gryt-chat/ima
 | `IMAGE_WORKER_POLL_MS` | `1000` | Database polling interval in milliseconds (250–10000) |
 | `HEALTH_PORT` | `8080` | HTTP health check port |
 
-## Quick Start (development)
+## Quick start (development)
 
 ```bash
 yarn install
