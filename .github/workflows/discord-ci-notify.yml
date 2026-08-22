@@ -12,6 +12,7 @@ on:
   workflow_run:
     workflows:
       - Discord release notification
+      - Release Image Worker
       - Sync Vikunja task
     types: [completed]
 
