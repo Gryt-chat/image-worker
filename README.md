@@ -18,7 +18,7 @@ Browse tags at [ghcr.io/gryt-chat/image-worker](https://github.com/Gryt-chat/ima
 ## It parses files strangers uploaded
 
 Compressing an avatar sounds like a utility job. This is the process that hands
-attacker-controlled bytes to an image decoder, so it is a review-required path
+attacker-controlled bytes to an image decoder, so it's a review-required path
 in [the AI policy](https://docs.gryt.chat/docs/guide/ai) and changes here get
 read line by line.
 
