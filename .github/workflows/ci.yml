@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 22, matching the Dockerfile's node:22-bookworm-slim builder and the
+          # 22 that Release Image Worker sets up. Testing on anything newer
+          # would be testing something this service does not run on.
+          node-version: "22"
+          cache: yarn
+
+      # --ignore-scripts, the way the Dockerfile installs. sharp's install
+      # script fetches a prebuilt binary for the platform, and CI only needs to
+      # typecheck against its types.
+      - run: yarn install --frozen-lockfile --ignore-scripts
+
+      # `build` is tsc. That is the whole check, and it is the one that was
+      # missing: this repo had bump-gitlink, discord-ci-notify,
+      # discord-release-notify, release and vikunja-task-done, and nothing that
+      # compiled a pull request. A type error reached main and waited for the
+      # release build to find it.
+      #
+      # sharp is why it matters here. It moved `SharpOptions` out of its
+      # namespace between 0.34 and 0.35, and on the server that broke the build
+      # in a file nobody had touched — caught by tsc, which is exactly what did
+      # not run here.
+      #
+      # No lint step: there is no eslint config in this repo. If one arrives,
+      # it belongs in this job.
+      - run: yarn build
