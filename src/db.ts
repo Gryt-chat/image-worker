@@ -23,11 +23,8 @@ export function initDb(): void {
 
   db = new DatabaseSync(dbPath);
 
-  // node:sqlite has no pragma() helper, so these go through exec(). Same
-  // statements better-sqlite3 was issuing, in the same order.
-  //
-  // WAL matters more here than it looks: the server holds this file open at the
-  // same time, and the worker writes to it from a second process.
+  // WAL matters here: the server holds this file open while the worker writes
+  // to it from a second process.
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
 
