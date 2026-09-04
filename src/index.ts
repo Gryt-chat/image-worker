@@ -33,21 +33,8 @@ const healthPort = clampInt(process.env.HEALTH_PORT, 8080, 1, 65535);
 const backfillMs = clampInt(process.env.IMAGE_WORKER_BACKFILL_MS, 60_000, 5_000, 3_600_000);
 const backfillBatch = clampInt(process.env.IMAGE_WORKER_BACKFILL_BATCH, 20, 1, 200);
 
-/**
- * What this worker is, so a server can say so.
- *
- * IMAGE_WORKER_VERSION first, because the tag is the source of truth here and
- * package.json is not: release.yml versions from `git tag` and never bumps the
- * file — it says so in a comment, and says nothing in src/ reads it. Reading it
- * anyway would have reported 1.0.6 for a worker released as 1.2.0, which is
- * worse than reporting nothing, since the entire point is telling someone
- * whether they are behind.
- *
- * So the Docker image is stamped at build time and the embedded bundle gets its
- * copied package.json rewritten with the real version. package.json stays as
- * the fallback for someone running from a checkout, and "unknown" is the answer
- * when neither can be trusted.
- */
+/* IMAGE_WORKER_VERSION first: release.yml versions from `git tag` and never
+   bumps package.json, so the file reports a stale version rather than none. */
 function readVersion(): string {
   const stamped = process.env.IMAGE_WORKER_VERSION?.trim();
   if (stamped) return stamped.replace(/^v/, "");
@@ -71,15 +58,8 @@ let rethumbedCount = 0;
 
 
 
-/**
- * Files this process has already failed to colour.
- *
- * The backfill query selects on `dominant_color IS NULL`, so a file whose
- * object is missing from storage matches forever and would be re-fetched every
- * sweep. Remembering the failures keeps that to once per file per process; a
- * restart retries, which is the right amount of persistence for something that
- * is usually a transient storage problem.
- */
+/* The backfill selects on `dominant_color IS NULL`, so a file whose object is
+   gone matches forever. Without this it is re-fetched every sweep. */
 const unreadable = new Set<string>();
 
 async function runOne(jobId: string): Promise<void> {
@@ -164,21 +144,8 @@ function tick(): void {
   }
 }
 
-/**
- * Give a colour to images that have one missing.
- *
- * The job queue covers whatever is posted to /api/uploads — chat attachments
- * and webhook avatars. A user's own avatar is not: it has a separate route
- * that resizes it inline and queues nothing. Everything uploaded before
- * `dominant_color` existed has a null regardless of how it arrived. So without
- * this pass, a server owner would have to ask every member to re-upload their
- * avatar before the tint that reads this column did anything.
- *
- * Deliberately the lowest-priority thing here: it yields the whole sweep to
- * real jobs, writes only the colour, and never touches the stored object or
- * the thumbnail. Re-deriving those is the job path's business, and doing it
- * from here would replace artefacts the server made on purpose.
- */
+/* Writes only the colour. Re-deriving the stored object or the thumbnail is
+   the job path's business, and doing it here would replace what it made. */
 async function backfillColours(): Promise<void> {
   if (inFlight >= concurrency) return;
 
@@ -218,19 +185,8 @@ async function backfillColours(): Promise<void> {
   }
 }
 
-/**
- * Bring old avatar thumbnails up to the size the server writes today.
- *
- * They were written at 64px, which is smaller than most places that want one
- * render at on a 2x screen — so the thumbnail existed but was too soft to use,
- * and every avatar in the client fetched the full file instead. Without this,
- * that stays true for every existing member until they change their avatar.
- *
- * The target comes from the server, not from a constant here. Nothing else
- * would let these two repositories disagree safely.
- *
- * Runs once per process, alongside the colour backfill and for the same reason.
- */
+/* The target size comes from the server, not a constant here. Anything else
+   lets the two repositories disagree without either noticing. */
 async function upgradeAvatarThumbnails(): Promise<void> {
   const bucket = process.env.S3_BUCKET || "";
 
@@ -286,17 +242,6 @@ async function upgradeAvatarThumbnails(): Promise<void> {
   }
 }
 
-/**
- * Health, and now version.
- *
- * /version is its own route so a caller that only wants to know what is running
- * does not have to care about the counters, and so the answer stays the same
- * shape if health ever grows. Everything else keeps answering health, which is
- * what it did before — the container healthcheck hits /.
- *
- * The version is in the health payload too. A worker that answers health but
- * cannot say what it is would be a worse answer than either alone.
- */
 function startHealthServer(): void {
   const server = http.createServer((req, res) => {
     const path = (req.url || "/").split("?")[0];
