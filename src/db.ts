@@ -57,13 +57,8 @@ function fromIso(s: string | null | undefined): Date {
   return new Date(s);
 }
 
-/**
- * node:sqlite types every row as `Record<string, SQLOutputValue>`, which does
- * not structurally overlap a named interface, so TypeScript rejects a direct
- * cast to one. The queries below select exactly the columns their interface
- * names, so the conversion is sound — this keeps the one unchecked step in a
- * single place rather than repeating `as unknown as` at each call site.
- */
+/* node:sqlite types rows as Record<string, SQLOutputValue>, which TypeScript
+   will not cast to a named interface. One unchecked step, kept in one place. */
 function rowsAs<T>(rows: Record<string, SQLOutputValue>[]): T[] {
   return rows as unknown as T[];
 }
@@ -173,18 +168,6 @@ export interface ColourlessFile {
   mime: string | null;
 }
 
-/**
- * Images that have no dominant colour yet.
- *
- * Two kinds end up here. Anything uploaded before the column existed, and
- * anything that never produces an image job at all — a user avatar goes to its
- * own /api/uploads/avatar route, which resizes inline and queues nothing, so
- * the job loop never sees one.
- *
- * Newest first: a colour is only ever looked at for a file someone is still
- * using, and on a server with years of attachments the recent end is the part
- * that pays for itself.
- */
 export function listFilesMissingDominantColor(limit: number): ColourlessFile[] {
   const d = getDb();
   const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
@@ -206,18 +189,10 @@ export interface AvatarThumb {
   mime: string | null;
 }
 
-/**
- * The avatar thumbnail size this server writes, as the server itself reports it.
- *
- * Read rather than hardcoded. There is no package shared with the server, and
- * the same constant written down in both repositories and kept in step by hand
- * is a coupling that fails quietly: too low and the rebuild pass never runs, too
- * high and it rebuilds every avatar on every start, forever. The server writes
- * this on each of its own starts, so it is whatever that build actually uses.
- *
- * Null on a server older than the column. Nothing to rebuild towards, so the
- * caller does nothing — which is the right answer, not a fallback guess.
- */
+/* Read from the server rather than hardcoded. The same constant in both
+   repositories fails quietly: too low and the rebuild never runs, too high and
+   it rebuilds every avatar on every start. Null means nothing to rebuild
+   towards, so the caller does nothing. */
 export function getAvatarThumbPx(): number | null {
   const d = getDb();
   try {
@@ -232,18 +207,8 @@ export function getAvatarThumbPx(): number | null {
   }
 }
 
-/**
- * Avatars whose thumbnail is smaller than the one this server writes today.
- *
- * `thumbnail_px` says how big each one is, so the query decides rather than the
- * caller decoding every thumbnail to find out. Null means it was made before
- * the column existed and its size is unknown, which is treated as "rebuild" —
- * those are exactly the 64px ones this pass is for.
- *
- * Keyed off the s3_key prefix because "is this an avatar" is not otherwise
- * recorded. Chat attachments have thumbnails too and are left alone; their size
- * was never the problem.
- */
+/* Null `thumbnail_px` means it predates the column, treated as "rebuild".
+   Keyed off the s3_key prefix because nothing else records "is this an avatar". */
 export function listUndersizedAvatarThumbnails(
   targetPx: number,
   limit: number,
