@@ -8,6 +8,8 @@
 
 ## Docker
 
+[![Gryt on StartupScores](https://startupscores.com/badge/gryt.svg?style=shield&v=combo&theme=dark)](https://startupscores.com/open-source/gryt)
+
 ```bash
 docker pull ghcr.io/gryt-chat/image-worker:latest
 docker run -v gryt-data:/data --env-file .env ghcr.io/gryt-chat/image-worker:latest
