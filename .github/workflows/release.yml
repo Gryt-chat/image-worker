@@ -1,13 +1,7 @@
 name: Release Image Worker
 
-# The one component with no way to ship. Release Server moves this repository's
-# gitlink and records its SHA in the release notes, but never builds its image —
-# so ghcr.io/gryt-chat/image-worker sat on the version published by hand in
-# March while main moved on, and anything deployed kept running that.
-#
-# Modelled on sfu/.github/workflows/release.yml, which has done this job for
-# fifty-odd releases. Same shape deliberately: plain semver, and the channel
-# decides which floating tag consumers following :latest or :latest-beta get.
+# The one component with no way to ship: Release Server moves this gitlink and never builds
+# the image. Modelled on the SFU's release, so the channel decides the floating tag.
 
 on:
   workflow_dispatch:
@@ -98,15 +92,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The tag is the source of truth, not package.json. main is a
-          # protected branch — "changes must be made through a pull request" —
-          # so a release cannot push a version-bump commit to it, and the
-          # default GITHUB_TOKEN is not an admin and cannot bypass that. Tags
-          # have no such rule, so the release tags and never touches the branch.
-          #
-          # package.json's version is therefore decorative here. Nothing reads
-          # it: the package is private, never published to npm, and nothing in
-          # src/ looks it up.
+          # The tag is the source of truth, not package.json: main is protected, so a
+          # release cannot push a version bump to it. Nothing reads package.json's version.
           CURRENT_VERSION="$(git tag --list 'v*' --sort=-v:refname | head -n1 | sed 's/^v//')"
 
           if [[ -z "$CURRENT_VERSION" ]]; then
@@ -189,9 +176,8 @@ jobs:
           V_MAJOR="$(echo "$VERSION" | cut -d. -f1)"
           V_MINOR="$(echo "$VERSION" | cut -d. -f2)"
 
-          # latest-beta always moves: a stable release is also the newest thing
-          # a beta follower should be on, and leaving it behind would strand
-          # them on an older build than the stable channel.
+          # latest-beta always moves: a stable release is also the newest thing a beta
+          # follower should be on, and leaving it behind would strand them.
           TAGS=(
             "${IMAGE}:${VERSION}"
             "${IMAGE}:${V_MAJOR}.${V_MINOR}"
