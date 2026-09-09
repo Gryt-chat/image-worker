@@ -19,6 +19,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "test:comment-length": "node scripts/check-comment-length.mjs",
     "dev": "node --watch -r ts-node/register src/index.ts",
     "start": "node dist/index.js"
   }

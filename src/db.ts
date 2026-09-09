@@ -186,10 +186,8 @@ export interface AvatarThumb {
   mime: string | null;
 }
 
-/* Read from the server rather than hardcoded. The same constant in both
-   repositories fails quietly: too low and the rebuild never runs, too high and
-   it rebuilds every avatar on every start. Null means nothing to rebuild
-   towards, so the caller does nothing. */
+/* Read from the server rather than hardcoded: the same constant in both repositories fails
+   quietly. Null means nothing to rebuild towards, so the caller does nothing. */
 export function getAvatarThumbPx(): number | null {
   const d = getDb();
   try {
