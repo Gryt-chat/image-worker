@@ -229,8 +229,6 @@ jobs:
             "${ARGS[@]}" \
             --push .
 
-      # discord-release-notify.yml already fires on release:published, so there
-      # is no notification step here.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -240,3 +238,63 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # A release made with GITHUB_TOKEN starts no other workflow, so release:published never fires.
+      - name: Notify Discord
+        shell: bash
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
+          VERSION: ${{ steps.version.outputs.version }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${WEBHOOK_URL:-}" ]]; then
+            echo "DISCORD_RELEASE_WEBHOOK_URL secret not set, skipping"
+            exit 0
+          fi
+
+          TAG="v$VERSION"
+          RELEASE_URL="https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/tag/$TAG"
+
+          if [[ "$CHANNEL" == "beta" ]]; then
+            DISP_CHANNEL="Beta"
+            COLOR=16750848
+          else
+            DISP_CHANNEL="Stable"
+            COLOR=5763719
+          fi
+
+          RELEASE_BODY="$(gh release view "$TAG" --repo "${RELEASE_OWNER}/${RELEASE_REPO}" --json body -q '.body' || true)"
+          BODY="$(printf '%s' "$RELEASE_BODY" | head -c 1800)"
+
+          PAYLOAD="$(jq -n \
+            --arg title "Gryt Image Worker $TAG" \
+            --arg url "$RELEASE_URL" \
+            --arg desc "$BODY" \
+            --arg channel "$DISP_CHANNEL" \
+            --arg component "Image Worker" \
+            --arg tag "$TAG" \
+            --argjson color "$COLOR" \
+            '{
+              embeds: [{
+                title: $title,
+                url: $url,
+                description: $desc,
+                color: $color,
+                fields: [
+                  { name: "Component", value: $component, inline: true },
+                  { name: "Channel", value: $channel, inline: true },
+                  { name: "Version", value: $tag, inline: true }
+                ],
+                footer: { text: "Gryt Releases" },
+                timestamp: (now | todate)
+              }]
+            }'
+          )"
+
+          curl -sfS \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK_URL"
