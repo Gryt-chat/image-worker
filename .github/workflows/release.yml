@@ -92,9 +92,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The tag is the source of truth, not package.json: main is protected, so a
-          # release cannot push a version bump to it. Nothing reads package.json's version.
-          CURRENT_VERSION="$(git tag --list 'v*' --sort=-v:refname | head -n1 | sed 's/^v//')"
+          CHANNEL="${{ steps.channel.outputs.channel }}"
+
+          # The tag is the source of truth, not package.json: main is protected. Stable
+          # tags only, so a beta never becomes the base of the next bump.
+          CURRENT_VERSION="$(
+            git -c versionsort.suffix=-alpha -c versionsort.suffix=-beta -c versionsort.suffix=-rc \
+                tag --list 'v*' --sort=-v:refname \
+              | grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+' \
+              | sed -n '1s/^v//p' || true
+          )"
 
           if [[ -z "$CURRENT_VERSION" ]]; then
             CURRENT_VERSION="$(node -p "require('./package.json').version")"
@@ -102,7 +109,7 @@ jobs:
           BUMP="${{ github.event.inputs.bump }}"
           CUSTOM_VERSION="${{ github.event.inputs.custom_version }}"
 
-          if ! [[ "$CURRENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+          if ! [[ "$CURRENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid current version: $CURRENT_VERSION"
             exit 1
           fi
@@ -113,16 +120,24 @@ jobs:
               exit 1
             fi
 
-            if ! [[ "$CUSTOM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
-              echo "Invalid custom version: $CUSTOM_VERSION"
-              echo "Expected semver like 1.2.3 or 1.2.3-beta.1"
+            # Same shapes checkout-release-tag.sh in Gryt-chat/gryt sorts into each channel.
+            if [[ "$CHANNEL" == "beta" ]]; then
+              CUSTOM_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$'
+              CUSTOM_EXAMPLE="1.2.3-beta.1"
+            else
+              CUSTOM_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+$'
+              CUSTOM_EXAMPLE="1.2.3"
+            fi
+
+            if ! [[ "$CUSTOM_VERSION" =~ $CUSTOM_PATTERN ]]; then
+              echo "Invalid custom version for the $CHANNEL channel: $CUSTOM_VERSION"
+              echo "Expected something like $CUSTOM_EXAMPLE"
               exit 1
             fi
 
             NEW_VERSION="$CUSTOM_VERSION"
           else
-            BASE_VERSION="${CURRENT_VERSION%%-*}"
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
 
             case "$BUMP" in
               major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
@@ -133,6 +148,16 @@ jobs:
                 exit 1
                 ;;
             esac
+
+            if [[ "$CHANNEL" == "beta" ]]; then
+              LAST_BETA="$(
+                git tag --list "v${NEW_VERSION}-beta.*" \
+                  | sed -nE "s/^v${NEW_VERSION//./\\.}-beta\.([0-9]+)$/\1/p" \
+                  | sort -n \
+                  | tail -n1
+              )"
+              NEW_VERSION="${NEW_VERSION}-beta.$(( ${LAST_BETA:-0} + 1 ))"
+            fi
           fi
 
           if [[ "$NEW_VERSION" == "$CURRENT_VERSION" ]]; then
@@ -180,13 +205,15 @@ jobs:
           # follower should be on, and leaving it behind would strand them.
           TAGS=(
             "${IMAGE}:${VERSION}"
-            "${IMAGE}:${V_MAJOR}.${V_MINOR}"
-            "${IMAGE}:${V_MAJOR}"
             "${IMAGE}:latest-beta"
           )
 
           if [[ "$CHANNEL" == "latest" ]]; then
-            TAGS+=("${IMAGE}:latest")
+            TAGS+=(
+              "${IMAGE}:${V_MAJOR}.${V_MINOR}"
+              "${IMAGE}:${V_MAJOR}"
+              "${IMAGE}:latest"
+            )
           fi
 
           ARGS=()
