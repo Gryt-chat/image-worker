@@ -210,6 +210,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
+        id: docker
         shell: bash
         run: |
           set -euo pipefail
@@ -220,19 +221,19 @@ jobs:
           V_MAJOR="$(echo "$VERSION" | cut -d. -f1)"
           V_MINOR="$(echo "$VERSION" | cut -d. -f2)"
 
-          # latest-beta always moves: a stable release is also the newest thing a beta
-          # follower should be on, and leaving it behind would strand them.
           TAGS=(
             "${IMAGE}:${VERSION}"
-            "${IMAGE}:latest-beta"
           )
 
+          # A stable release moves latest-beta in the last step, and only if the beta there is older.
           if [[ "$CHANNEL" == "latest" ]]; then
             TAGS+=(
               "${IMAGE}:${V_MAJOR}.${V_MINOR}"
               "${IMAGE}:${V_MAJOR}"
               "${IMAGE}:latest"
             )
+          else
+            TAGS+=("${IMAGE}:latest-beta")
           fi
 
           ARGS=()
@@ -317,3 +318,22 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
             "$WEBHOOK_URL"
+
+      # A stable release moves latest-beta too, unless a newer beta is already there, so beta never
+      # runs behind prod (GRYT-1236). Last, and gated on the push, so it can't cost the release.
+      - name: Bring latest-beta up to this release
+        if: ${{ !cancelled() && steps.docker.outcome == 'success' && steps.channel.outputs.channel == 'latest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SCRIPT="https://raw.githubusercontent.com/Gryt-chat/gryt/main/.github/scripts/beta-follows-latest.mjs"
+          if ! curl -fsSL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/beta-follows-latest.mjs" "$SCRIPT"; then
+            echo "Could not download $SCRIPT, so latest-beta was left where it is."
+            exit 1
+          fi
+
+          TARGET="$(node "$RUNNER_TEMP/beta-follows-latest.mjs" "$IMAGE" "${{ steps.version.outputs.version }}")"
+          if [[ -n "$TARGET" ]]; then
+            docker buildx imagetools create -t "${IMAGE}:latest-beta" "${IMAGE}@${TARGET}"
+          fi
