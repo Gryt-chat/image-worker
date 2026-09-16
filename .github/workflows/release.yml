@@ -260,20 +260,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # A release made with GITHUB_TOKEN starts no other workflow, so release:published never fires.
-      - name: Notify Discord
+      - name: Build the release announcement
+        id: announcement
         shell: bash
         env:
-          WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
           VERSION: ${{ steps.version.outputs.version }}
           CHANNEL: ${{ steps.channel.outputs.channel }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-
-          if [[ -z "${WEBHOOK_URL:-}" ]]; then
-            echo "DISCORD_RELEASE_WEBHOOK_URL secret not set, skipping"
-            exit 0
-          fi
 
           TAG="v$VERSION"
           RELEASE_URL="https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/tag/$TAG"
@@ -289,7 +284,7 @@ jobs:
           RELEASE_BODY="$(gh release view "$TAG" --repo "${RELEASE_OWNER}/${RELEASE_REPO}" --json body -q '.body' || true)"
           BODY="$(printf '%s' "$RELEASE_BODY" | head -c 1800)"
 
-          PAYLOAD="$(jq -n \
+          PAYLOAD="$(jq -cn \
             --arg title "Gryt Image Worker $TAG" \
             --arg url "$RELEASE_URL" \
             --arg desc "$BODY" \
@@ -314,10 +309,14 @@ jobs:
             }'
           )"
 
-          curl -sfS \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "$WEBHOOK_URL"
+          echo "payload=$PAYLOAD" >> "$GITHUB_OUTPUT"
+
+      - name: Announce the release on Discord and Gryt
+        uses: Gryt-chat/.github/actions/notify@main
+        with:
+          payload: ${{ steps.announcement.outputs.payload }}
+          discord-webhook-url: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
+          gryt-webhook-url: ${{ secrets.GRYT_RELEASE_WEBHOOK_URL }}
 
       # A stable release moves latest-beta too, unless a newer beta is already there, so beta never
       # runs behind prod (GRYT-1236). Last, and gated on the push, so it can't cost the release.
