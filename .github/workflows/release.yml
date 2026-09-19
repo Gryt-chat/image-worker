@@ -260,61 +260,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # A release made with GITHUB_TOKEN starts no other workflow, so release:published never fires.
-      - name: Build the release announcement
-        id: announcement
-        shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          CHANNEL: ${{ steps.channel.outputs.channel }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          TAG="v$VERSION"
-          RELEASE_URL="https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/tag/$TAG"
-
-          if [[ "$CHANNEL" == "beta" ]]; then
-            DISP_CHANNEL="Beta"
-            COLOR=16750848
-          else
-            DISP_CHANNEL="Stable"
-            COLOR=5763719
-          fi
-
-          RELEASE_BODY="$(gh release view "$TAG" --repo "${RELEASE_OWNER}/${RELEASE_REPO}" --json body -q '.body' || true)"
-          BODY="$(printf '%s' "$RELEASE_BODY" | head -c 1800)"
-
-          PAYLOAD="$(jq -cn \
-            --arg title "Gryt Image Worker $TAG" \
-            --arg url "$RELEASE_URL" \
-            --arg desc "$BODY" \
-            --arg channel "$DISP_CHANNEL" \
-            --arg component "Image Worker" \
-            --arg tag "$TAG" \
-            --argjson color "$COLOR" \
-            '{
-              embeds: [{
-                title: $title,
-                url: $url,
-                description: $desc,
-                color: $color,
-                fields: [
-                  { name: "Component", value: $component, inline: true },
-                  { name: "Channel", value: $channel, inline: true },
-                  { name: "Version", value: $tag, inline: true }
-                ],
-                footer: { text: "Gryt Releases" },
-                timestamp: (now | todate)
-              }]
-            }'
-          )"
-
-          echo "payload=$PAYLOAD" >> "$GITHUB_OUTPUT"
-
       - name: Announce the release on Discord and Gryt
-        uses: Gryt-chat/.github/actions/notify@main
+        uses: Gryt-chat/.github/actions/release-notify@main
         with:
-          payload: ${{ steps.announcement.outputs.payload }}
+          component: Image Worker
+          version: ${{ steps.version.outputs.version }}
+          channel: ${{ steps.channel.outputs.channel }}
+          repository: Gryt-chat/image-worker
+          tag: v${{ steps.version.outputs.version }}
+          artifact-label: Docker
+          artifact-value: ghcr.io/gryt-chat/image-worker:${{ steps.version.outputs.version }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           discord-webhook-url: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
           gryt-webhook-url: ${{ secrets.GRYT_RELEASE_WEBHOOK_URL }}
 
