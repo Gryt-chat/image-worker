@@ -17,7 +17,7 @@ on:
   commit_comment:
     types: [created]
   discussion:
-    types: [created, answered, closed, reopened]
+    types: [created, answered, unanswered]
   discussion_comment:
     types: [created]
 
