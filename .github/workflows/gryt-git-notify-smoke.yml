@@ -1,0 +1,16 @@
+name: Gryt Git notification smoke
+
+on:
+  push:
+    branches: [fix/gryt-git-notify-events]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Gryt-chat/.github/actions/git-notify@main
+        with:
+          gryt-webhook-url: ${{ secrets.GRYT_GIT_WEBHOOK_URL }}
