@@ -1,0 +1,17 @@
+name: Gryt trigger schema A
+on:
+  push:
+    branches: [fix/gryt-git-notify-events]
+  create:
+  delete:
+  issues:
+    types: [opened, reopened, closed, labeled, unlabeled, assigned, unassigned]
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, reopened, closed, synchronize, ready_for_review, converted_to_draft, review_requested]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
