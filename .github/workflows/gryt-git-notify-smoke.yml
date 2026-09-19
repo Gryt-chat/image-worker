@@ -11,6 +11,6 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - uses: Gryt-chat/.github/actions/git-notify@main
+      - uses: Gryt-chat/.github/actions/git-notify@fix/gryt-git-notify-events
         with:
           gryt-webhook-url: ${{ secrets.GRYT_GIT_WEBHOOK_URL }}
