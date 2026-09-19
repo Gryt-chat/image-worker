@@ -4,13 +4,12 @@ on:
   push:
     branches: [fix/gryt-git-notify-events]
 
-permissions:
-  contents: read
-
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - uses: Gryt-chat/.github/actions/git-notify@fix/gryt-git-notify-events
+      - uses: Gryt-chat/.github/actions/notify@fix/gryt-git-notify-events
         with:
           gryt-webhook-url: ${{ secrets.GRYT_GIT_WEBHOOK_URL }}
+          gryt-payload: >-
+            {"display_name":"GitHub","cards":[{"title":"Gryt webhook smoke test","description":"Redirect handling validation","color":"#968ff8"}]}
