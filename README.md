@@ -37,6 +37,7 @@ read line by line.
 | `IMAGE_WORKER_CONCURRENCY` | `2` | Max concurrent image processing jobs (1–8) |
 | `IMAGE_WORKER_POLL_MS` | `1000` | Database polling interval in milliseconds (250–10000) |
 | `HEALTH_PORT` | `8080` | HTTP health check port |
+| `HEALTH_HOST` | `127.0.0.1` | Address the health server binds to. Empty listens on every interface; the Docker image sets `0.0.0.0` |
 
 ## Quick start (development)
 

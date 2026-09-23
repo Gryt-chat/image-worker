@@ -27,9 +27,18 @@ function clampInt(
   return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
+/* The health payload carries the version and the counters, so it defaults to
+   loopback. Empty means every interface, as SFU_CONTROL_HOST does. */
+function readHost(value: string | undefined): string | undefined {
+  const host = value?.trim();
+  if (host === undefined) return "127.0.0.1";
+  return host === "" ? undefined : host;
+}
+
 const concurrency = clampInt(process.env.IMAGE_WORKER_CONCURRENCY, 2, 1, 8);
 const pollMs = clampInt(process.env.IMAGE_WORKER_POLL_MS, 1000, 250, 10_000);
 const healthPort = clampInt(process.env.HEALTH_PORT, 8080, 1, 65535);
+const healthHost = readHost(process.env.HEALTH_HOST);
 const backfillMs = clampInt(process.env.IMAGE_WORKER_BACKFILL_MS, 60_000, 5_000, 3_600_000);
 const backfillBatch = clampInt(process.env.IMAGE_WORKER_BACKFILL_BATCH, 20, 1, 200);
 
@@ -265,8 +274,10 @@ function startHealthServer(): void {
       }),
     );
   });
-  server.listen(healthPort, () => {
-    consola.info(`[ImageWorker] Health server on :${healthPort}`);
+  server.listen(healthPort, healthHost, () => {
+    consola.info(
+      `[ImageWorker] Health server on ${healthHost ?? "*"}:${healthPort}`,
+    );
   });
 }
 

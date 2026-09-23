@@ -31,10 +31,15 @@ RUN mkdir -p /data && chown -R gryt:gryt /data
 ARG IMAGE_WORKER_VERSION=""
 ENV IMAGE_WORKER_VERSION=$IMAGE_WORKER_VERSION
 
+# Compose publishes this port, and the community stack dials image-worker:8080
+# from another container, so in an image it has to stay on every interface.
+ENV HEALTH_HOST=0.0.0.0
+
 USER gryt
 EXPOSE 8080
 
+# 127.0.0.1, not localhost: the bind is IPv4 now, and localhost can resolve to ::1.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://localhost:8080/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:8080/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "dist/index.js"]
