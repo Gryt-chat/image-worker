@@ -1,10 +1,13 @@
 import type { S3Client as S3ClientType } from "@aws-sdk/client-s3";
-import { existsSync } from "fs";
-import { mkdir, readFile, unlink, writeFile } from "fs/promises";
+import { constants, createWriteStream, existsSync } from "fs";
+import { copyFile, mkdir, readFile, unlink, writeFile } from "fs/promises";
 import { dirname, join } from "path";
+import type { Readable } from "stream";
+import { pipeline } from "stream/promises";
 
 interface StorageBackend {
   getObjectAsBuffer(bucket: string, key: string): Promise<Buffer>;
+  getObjectToFile(bucket: string, key: string, dest: string): Promise<void>;
   putObject(bucket: string, key: string, body: Buffer, contentType?: string): Promise<void>;
   deleteObject(bucket: string, key: string): Promise<void>;
 }
@@ -32,6 +35,13 @@ const s3Backend: StorageBackend = {
     if (!body) throw new Error(`Empty S3 body for ${key}`);
     const bytes = await body.transformToByteArray();
     return Buffer.from(bytes);
+  },
+
+  async getObjectToFile(bucket, key, dest) {
+    const { GetObjectCommand } = getSdk();
+    const res = await getS3().send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    if (!res.Body) throw new Error(`Empty S3 body for ${key}`);
+    await pipeline(res.Body as Readable, createWriteStream(dest, { flags: "wx", mode: 0o600 }));
   },
 
   async putObject(bucket, key, body, contentType) {
@@ -65,6 +75,10 @@ const fsBackend: StorageBackend = {
       throw err;
     }
     return readFile(filePath);
+  },
+
+  async getObjectToFile(bucket, key, dest) {
+    await copyFile(resolvePath(bucket, key), dest, constants.COPYFILE_EXCL);
   },
 
   async putObject(bucket, key, body, contentType) {
@@ -126,6 +140,11 @@ export async function initStorage(): Promise<void> {
 
 export function getObjectAsBuffer(bucket: string, key: string): Promise<Buffer> {
   return getBackend().getObjectAsBuffer(bucket, key);
+}
+
+/** Streams to disk, so a video never has to fit in memory. */
+export function getObjectToFile(bucket: string, key: string, dest: string): Promise<void> {
+  return getBackend().getObjectToFile(bucket, key, dest);
 }
 
 export function putObject(

@@ -15,6 +15,12 @@ RUN yarn install --production --ignore-engines --network-timeout 600000
 
 FROM --platform=$TARGETPLATFORM node:22-bookworm-slim
 
+# ffmpeg for video posters, run under prlimit (util-linux, already in the base)
+# with the whitelists in src/videoPoster.ts. Debian's build, so security fixes arrive with apt.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd -g 1001 gryt && useradd -m -u 1001 -g 1001 -d /app -s /usr/sbin/nologin gryt
 WORKDIR /app
 ENV NODE_ENV=production

@@ -15,6 +15,7 @@ import {
 } from "./db";
 import { findDominantColor, processUploadedImage } from "./processImage";
 import { getObjectAsBuffer, initStorage, putObject } from "./storage";
+import { findFrameTools, processUploadedVideo } from "./videoPoster";
 
 function clampInt(
   value: string | undefined,
@@ -65,7 +66,7 @@ let errorCount = 0;
 let colouredCount = 0;
 let rethumbedCount = 0;
 
-
+const frameTools = findFrameTools();
 
 /* The backfill selects on `dominant_color IS NULL`, so a file whose object is
    gone matches forever. Without this it is re-fetched every sweep. */
@@ -78,6 +79,11 @@ async function runOne(jobId: string): Promise<void> {
     if (!job || job.status !== "queued") return;
 
     updateImageJobStatus({ job_id: jobId, status: "processing" });
+
+    if (job.raw_content_type.toLowerCase().startsWith("video/")) {
+      await runPosterJob(jobId, job.file_id, job.raw_s3_key, bucket);
+      return;
+    }
 
     const maxBytes = getUploadMaxBytes();
 
@@ -130,6 +136,26 @@ async function runOne(jobId: string): Promise<void> {
   } finally {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
+}
+
+/* A refused file is an error on the job, not a crash. A worker without ffmpeg
+   finishes the job with no poster, which is what a video had before. */
+async function runPosterJob(jobId: string, fileId: string, rawKey: string, bucket: string): Promise<void> {
+  const poster = await processUploadedVideo(bucket, fileId, rawKey, frameTools);
+  if (poster.thumbKey) updateFileRecord(fileId, { thumbnail_key: poster.thumbKey });
+
+  if (poster.refused) {
+    errorCount++;
+    consola.warn(`[ImageWorker] Job ${jobId} refused (file=${fileId}): ${poster.reason}`);
+    updateImageJobStatus({ job_id: jobId, status: "error", error_message: poster.reason });
+    return;
+  }
+
+  updateImageJobStatus({ job_id: jobId, status: "done", error_message: poster.reason });
+  processedCount++;
+  consola.info(
+    `[ImageWorker] Job ${jobId} done (file=${fileId}, poster=${poster.thumbKey ? "yes" : `no, ${poster.reason}`})`,
+  );
 }
 
 function tick(): void {
@@ -284,6 +310,9 @@ function startHealthServer(): void {
 async function main(): Promise<void> {
   consola.info(`[ImageWorker] Starting v${version}...`);
   consola.info(`[ImageWorker] concurrency=${concurrency}, pollMs=${pollMs}`);
+  consola.info(
+    `[ImageWorker] Video posters: ffmpeg=${frameTools.ffmpeg ?? "none"}, prlimit=${frameTools.prlimit ?? "none"}`,
+  );
 
   await initStorage();
   initDb();
