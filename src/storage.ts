@@ -118,6 +118,8 @@ export async function initStorage(): Promise<void> {
   const storageType = (process.env.STORAGE_BACKEND || "s3").toLowerCase();
   if (storageType === "filesystem") {
     fsDataDir = process.env.DATA_DIR || "./data";
+    // The server defaults to the same folder, so a compose file can leave both unset.
+    if (!(process.env.S3_BUCKET || "").trim()) process.env.S3_BUCKET = "gryt";
     backend = fsBackend;
   } else {
     const sdk = await import("@aws-sdk/client-s3");
