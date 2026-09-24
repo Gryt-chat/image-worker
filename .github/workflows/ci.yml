@@ -25,6 +25,11 @@ jobs:
       # before, so a type error reached main. No lint step: there is no eslint config.
       - run: yarn build
 
+      # The poster tests run the real ffmpeg under prlimit. With CI set they fail rather
+      # than skip when it is missing, so this install is what makes them count.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: yarn test
+
       # No comment runs past two lines. The script carries the list of paths still
       # to be swept, and that list only ever shrinks.
       - run: yarn test:comment-length
