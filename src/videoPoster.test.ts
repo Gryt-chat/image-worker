@@ -36,12 +36,13 @@ function lavfi(seconds: number): string[] {
 
 describe("the ffmpeg command", () => {
   it("confines the input before it is opened", () => {
-    const args = ffmpegArgs("/tmp/x/input", 1);
+    const args = ffmpegArgs(1);
     const input = args.indexOf("-i");
     const before = args.slice(0, input);
 
     for (const [flag, value] of [
-      ["-protocol_whitelist", "file"],
+      ["-protocol_whitelist", "fd"],
+      ["-fd", "3"],
       ["-format_whitelist", "mov,mp4,matroska,webm"],
       ["-codec_whitelist", "h264,hevc,vp8,vp9,libdav1d"],
       ["-threads", "1"],
@@ -50,7 +51,7 @@ describe("the ffmpeg command", () => {
     }
     assert.equal(FORMAT_WHITELIST, "mov,mp4,matroska,webm");
     assert.equal(CODEC_WHITELIST, "h264,hevc,vp8,vp9,libdav1d");
-    assert.equal(args[input + 1], "file:/tmp/x/input", "the input is a local file, never a URL");
+    assert.equal(args[input + 1], "fd:", "the input is fd 3, never a path or a URL");
     assert.equal(args[args.indexOf("-frames:v") + 1], "1");
     assert.equal(args[args.lastIndexOf("-threads") + 1], "1", "the encoder threads too");
     assert.ok(args.lastIndexOf("-threads") > input);
@@ -58,8 +59,8 @@ describe("the ffmpeg command", () => {
   });
 
   it("seeks no later than one second", () => {
-    assert.equal(ffmpegArgs("/in", 1)[ffmpegArgs("/in", 1).indexOf("-ss") + 1], "1");
-    assert.equal(ffmpegArgs("/in", 0)[ffmpegArgs("/in", 0).indexOf("-ss") + 1], "0");
+    assert.equal(ffmpegArgs(1)[ffmpegArgs(1).indexOf("-ss") + 1], "1");
+    assert.equal(ffmpegArgs(0)[ffmpegArgs(0).indexOf("-ss") + 1], "0");
   });
 
   it("runs under prlimit when there is one", () => {
@@ -70,6 +71,39 @@ describe("the ffmpeg command", () => {
   it("refuses to run uncapped on Linux", () => {
     const cmd = frameCommand({ ffmpeg: "/usr/bin/ffmpeg", prlimit: null }, [], "linux");
     assert.ok("missing" in cmd && /prlimit/.test(cmd.missing));
+  });
+
+  it("runs ffmpeg through the jail when there is one, and nothing else", () => {
+    const socket = join(dir, "jail.sock");
+    writeFileSync(socket, "");
+    const tools = { ffmpeg: "/usr/bin/ffmpeg", prlimit: "/usr/bin/prlimit", jail: { client: "/usr/local/bin/ffjail", socket } };
+    assert.deepEqual(frameCommand(tools, ["-x"], "linux", 1234, 5000), {
+      cmd: "/usr/local/bin/ffjail",
+      argv: ["run", socket, "1234", "5000", "--", "-x"],
+    });
+  });
+
+  it("gives no poster when the jail isn't running, rather than run ffmpeg outside it", () => {
+    const tools = { ffmpeg: "/usr/bin/ffmpeg", prlimit: "/usr/bin/prlimit", jail: { client: "/usr/local/bin/ffjail", socket: "/nonexistent.sock" } };
+    const cmd = frameCommand(tools, [], "linux");
+    assert.ok("missing" in cmd && /jail/.test(cmd.missing));
+    const noClient = frameCommand({ ...tools, jail: { client: null, socket: "/nonexistent.sock" } }, [], "linux");
+    assert.ok("missing" in noClient && /ffjail/.test(noClient.missing));
+  });
+
+  it("counts a jail that couldn't start ffmpeg as no poster, not a refused file", async () => {
+    const client = join(dir, "fake-ffjail");
+    writeFileSync(client, "#!/bin/sh\necho 'ffjail: seccomp: Invalid argument' >&2\nexit 125\n", { mode: 0o755 });
+    writeFileSync(join(dir, "jail.sock"), "");
+    writeFileSync(join(dir, "input"), "");
+    const tools = { ffmpeg: null, prlimit: null, jail: { client, socket: join(dir, "jail.sock") } };
+    const grabbed = await grabFrame(join(dir, "input"), tools);
+    assert.deepEqual(grabbed, { ok: false, refused: false, reason: "ffjail: seccomp: Invalid argument" });
+  });
+
+  it("looks for ffjail only when the image names a socket", () => {
+    assert.equal(findFrameTools("", undefined).jail, undefined);
+    assert.deepEqual(findFrameTools("", "/run/x.sock").jail, { client: null, socket: "/run/x.sock" });
   });
 
   it("runs ffmpeg directly on a dev machine without prlimit", () => {

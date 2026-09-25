@@ -10,9 +10,9 @@ const EMPTY = /^(\/\*+|\*+\/?|\/\/|#)$|[─=]{3,}\s*\*?\/?$/;
 /* Paths not swept yet. Delete an entry once that directory is clean. */
 const NOT_YET = [];
 
-const ROOTS = ["src", "scripts", ".github/workflows"];
+const ROOTS = ["src", "scripts", "jail", "test", ".github/workflows"];
 const SKIP = new Set(["node_modules", "dist", "build", "out", "coverage", ".git"]);
-const CODE = /\.(ts|tsx|js|mjs|cjs|jsx)$/;
+const CODE = /\.(ts|tsx|js|mjs|cjs|jsx|c)$/;
 const HASH = /\.(ya?ml|sh)$/;
 
 function files(dir) {

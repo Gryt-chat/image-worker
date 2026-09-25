@@ -1,8 +1,9 @@
-import { spawn } from "child_process";
-import { accessSync, constants } from "fs";
-import { mkdtemp, rm } from "fs/promises";
+import { spawn, type ChildProcessByStdio } from "child_process";
+import { accessSync, constants, existsSync } from "fs";
+import { mkdtemp, open, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { delimiter, join } from "path";
+import type { Readable } from "stream";
 import sharp from "sharp";
 
 import { getObjectToFile, putObject } from "./storage";
@@ -20,9 +21,14 @@ const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 const MAX_INPUT_PIXELS = 100_000_000;
 const POSTER_WIDTH = 320;
 
+/** ffjail's exit code when ffmpeg never ran: no jail to reach, or the jail couldn't start it. */
+export const JAIL_FAILED = 125;
+
 export interface FrameTools {
   ffmpeg: string | null;
   prlimit: string | null;
+  /** Set in the Docker image, where ffmpeg only runs inside jail/ffjail.c. */
+  jail?: { client: string | null; socket: string };
 }
 
 export type FrameResult =
@@ -43,22 +49,24 @@ export function findExecutable(name: string, pathEnv = process.env.PATH ?? ""): 
   return null;
 }
 
-export function findFrameTools(pathEnv?: string): FrameTools {
-  return { ffmpeg: findExecutable("ffmpeg", pathEnv), prlimit: findExecutable("prlimit", pathEnv) };
+export function findFrameTools(pathEnv?: string, jailSocket = process.env.FFJAIL_SOCKET): FrameTools {
+  const tools = { ffmpeg: findExecutable("ffmpeg", pathEnv), prlimit: findExecutable("prlimit", pathEnv) };
+  if (!jailSocket) return tools;
+  return { ...tools, jail: { client: findExecutable("ffjail", pathEnv), socket: jailSocket } };
 }
 
-/** Everything before `-i` confines the input side; the output is one PNG on stdout.
+/** The input is fd 3, so ffmpeg never opens a path. Everything before `-i` confines it.
     One thread on each side: every extra thread reserves its own malloc arena under the cap. */
-export function ffmpegArgs(inputPath: string, seekSeconds: number): string[] {
+export function ffmpegArgs(seekSeconds: number): string[] {
   return [
     "-nostdin", "-hide_banner", "-loglevel", "error",
     "-filter_threads", "1",
-    "-protocol_whitelist", "file",
+    "-protocol_whitelist", "fd",
     "-format_whitelist", FORMAT_WHITELIST,
     "-codec_whitelist", CODEC_WHITELIST,
     "-threads", "1",
     "-ss", String(seekSeconds),
-    "-i", `file:${inputPath}`,
+    "-fd", "3", "-i", "fd:",
     "-map", "0:v:0", "-an", "-sn", "-dn",
     "-frames:v", "1",
     "-threads", "1",
@@ -74,7 +82,14 @@ export function frameCommand(
   args: string[],
   platform: NodeJS.Platform = process.platform,
   memoryBytes = FFMPEG_MEMORY_BYTES,
+  timeoutMs = FFMPEG_TIMEOUT_MS,
 ): { cmd: string; argv: string[] } | { missing: string } {
+  if (tools.jail) {
+    const { client, socket } = tools.jail;
+    if (!client) return { missing: "ffjail is not installed" };
+    if (!existsSync(socket)) return { missing: "the ffmpeg jail isn't running" };
+    return { cmd: client, argv: ["run", socket, String(memoryBytes), String(timeoutMs), "--", ...args] };
+  }
   if (!tools.ffmpeg) return { missing: "ffmpeg is not installed" };
   if (tools.prlimit) {
     return { cmd: tools.prlimit, argv: [`--as=${memoryBytes}`, "--", tools.ffmpeg, ...args] };
@@ -84,10 +99,9 @@ export function frameCommand(
 }
 
 /** The first lines, which name the cause; the last ones only say opening failed.
-    Printable and without our temp path, since stderr describes a stranger's file. */
-function describeFailure(stderr: string, inputPath: string): string {
+    Printable only, since stderr describes a stranger's file. */
+function describeFailure(stderr: string): string {
   const lines = stderr
-    .split(inputPath).join("<input>")
     .replace(/[^\x20-\x7e\n]/g, "?")
     .split("\n")
     .map((l) => l.replace(/^\[[^\]]*\]\s*/, "").trim())
@@ -103,10 +117,23 @@ interface RunResult {
   tooBig: boolean;
 }
 
-function run(cmd: string, argv: string[], timeoutMs: number): Promise<RunResult> {
+async function run(cmd: string, argv: string[], inputPath: string, timeoutMs: number): Promise<RunResult> {
+  const input = await open(inputPath, "r");
+  try {
+    return await spawnWithInput(cmd, argv, input.fd, timeoutMs);
+  } finally {
+    await input.close();
+  }
+}
+
+function spawnWithInput(cmd: string, argv: string[], inputFd: number, timeoutMs: number): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     // No shell, and an empty environment so the S3 credentials stay with us.
-    const child = spawn(cmd, argv, { cwd: tmpdir(), env: {}, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(cmd, argv, {
+      cwd: tmpdir(),
+      env: {},
+      stdio: ["ignore", "pipe", "pipe", inputFd],
+    }) as ChildProcessByStdio<null, Readable, Readable>;
     const chunks: Buffer[] = [];
     let size = 0;
     let stderr = "";
@@ -149,20 +176,23 @@ export async function grabFrame(
   { timeoutMs = FFMPEG_TIMEOUT_MS, memoryBytes = FFMPEG_MEMORY_BYTES } = {},
 ): Promise<FrameResult> {
   for (const seek of [1, 0]) {
-    const command = frameCommand(tools, ffmpegArgs(inputPath, seek), process.platform, memoryBytes);
+    const command = frameCommand(tools, ffmpegArgs(seek), process.platform, memoryBytes, timeoutMs);
     if ("missing" in command) return { ok: false, refused: false, reason: command.missing };
 
     let result: RunResult;
     try {
-      result = await run(command.cmd, command.argv, timeoutMs);
+      result = await run(command.cmd, command.argv, inputPath, timeoutMs);
     } catch (err) {
       return { ok: false, refused: false, reason: `could not start ffmpeg: ${(err as Error).message}` };
     }
 
     if (result.timedOut) return { ok: false, refused: true, reason: `ffmpeg ran past ${timeoutMs}ms` };
     if (result.tooBig) return { ok: false, refused: true, reason: "ffmpeg's frame was over the size cap" };
+    if (tools.jail && result.code === JAIL_FAILED) {
+      return { ok: false, refused: false, reason: describeFailure(result.stderr) };
+    }
     if (result.code !== 0) {
-      return { ok: false, refused: true, reason: describeFailure(result.stderr, inputPath) };
+      return { ok: false, refused: true, reason: describeFailure(result.stderr) };
     }
     if (result.stdout.length > 0) return { ok: true, frame: result.stdout };
   }
