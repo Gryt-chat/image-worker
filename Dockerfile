@@ -48,6 +48,12 @@ RUN cd "ffmpeg-${FFMPEG_VERSION}" \
  && make -j"$(nproc)" ffmpeg \
  && mkdir /out && strip -o /out/ffmpeg ffmpeg
 
+FROM --platform=$TARGETPLATFORM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS ffjail
+RUN apk add --no-cache build-base linux-headers
+COPY jail/ffjail.c /build/ffjail.c
+RUN gcc -O2 -Wall -Wextra -Werror -fstack-protector-strong -D_FORTIFY_SOURCE=2 -static-pie \
+      -o /build/ffjail /build/ffjail.c
+
 FROM --platform=$TARGETPLATFORM node:22-bookworm AS deps
 WORKDIR /app
 
@@ -56,10 +62,16 @@ RUN yarn install --production --ignore-engines --network-timeout 600000
 
 FROM --platform=$TARGETPLATFORM node:22-bookworm-slim
 
-# A static ffmpeg with only what a poster needs, run under prlimit (util-linux, in the base).
-COPY --from=ffmpeg /out/ffmpeg /usr/local/bin/ffmpeg
+# ffmpeg isn't on PATH: it only runs through ffjail, as gryt-ff, in the empty /opt/gryt-ff/jail.
+COPY --from=ffmpeg /out/ffmpeg /opt/gryt-ff/ffmpeg
+COPY --from=ffjail /build/ffjail /usr/local/bin/ffjail
+COPY jail/entrypoint.sh /usr/local/bin/gryt-entrypoint
 
-RUN groupadd -g 1001 gryt && useradd -m -u 1001 -g 1001 -d /app -s /usr/sbin/nologin gryt
+RUN groupadd -g 1001 gryt && useradd -m -u 1001 -g 1001 -d /app -s /usr/sbin/nologin gryt \
+ && groupadd -g 1002 gryt-ff && useradd -M -u 1002 -g 1002 -d /nonexistent -s /usr/sbin/nologin gryt-ff \
+ && install -d -m 0555 /opt/gryt-ff/jail \
+ && install -d -m 0750 -g gryt /run/gryt-ff
+ENV FFJAIL_SOCKET=/run/gryt-ff/ffjail.sock
 WORKDIR /app
 ENV NODE_ENV=production
 
@@ -79,11 +91,12 @@ ENV IMAGE_WORKER_VERSION=$IMAGE_WORKER_VERSION
 # from another container, so in an image it has to stay on every interface.
 ENV HEALTH_HOST=0.0.0.0
 
-USER gryt
+# No USER: the entrypoint starts the jail as root, then runs the worker as gryt.
 EXPOSE 8080
 
 # 127.0.0.1, not localhost: the bind is IPv4 now, and localhost can resolve to ::1.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:8080/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+ENTRYPOINT ["/usr/local/bin/gryt-entrypoint"]
 CMD ["node", "dist/index.js"]

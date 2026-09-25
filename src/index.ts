@@ -311,7 +311,9 @@ async function main(): Promise<void> {
   consola.info(`[ImageWorker] Starting v${version}...`);
   consola.info(`[ImageWorker] concurrency=${concurrency}, pollMs=${pollMs}`);
   consola.info(
-    `[ImageWorker] Video posters: ffmpeg=${frameTools.ffmpeg ?? "none"}, prlimit=${frameTools.prlimit ?? "none"}`,
+    frameTools.jail
+      ? `[ImageWorker] Video posters: ffmpeg in the jail at ${frameTools.jail.socket}, ffjail=${frameTools.jail.client ?? "none"}`
+      : `[ImageWorker] Video posters: ffmpeg=${frameTools.ffmpeg ?? "none"}, prlimit=${frameTools.prlimit ?? "none"}`,
   );
 
   await initStorage();

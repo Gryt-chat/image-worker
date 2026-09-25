@@ -73,6 +73,39 @@ describe("the ffmpeg command", () => {
     assert.ok("missing" in cmd && /prlimit/.test(cmd.missing));
   });
 
+  it("runs ffmpeg through the jail when there is one, and nothing else", () => {
+    const socket = join(dir, "jail.sock");
+    writeFileSync(socket, "");
+    const tools = { ffmpeg: "/usr/bin/ffmpeg", prlimit: "/usr/bin/prlimit", jail: { client: "/usr/local/bin/ffjail", socket } };
+    assert.deepEqual(frameCommand(tools, ["-x"], "linux", 1234, 5000), {
+      cmd: "/usr/local/bin/ffjail",
+      argv: ["run", socket, "1234", "5000", "--", "-x"],
+    });
+  });
+
+  it("gives no poster when the jail isn't running, rather than run ffmpeg outside it", () => {
+    const tools = { ffmpeg: "/usr/bin/ffmpeg", prlimit: "/usr/bin/prlimit", jail: { client: "/usr/local/bin/ffjail", socket: "/nonexistent.sock" } };
+    const cmd = frameCommand(tools, [], "linux");
+    assert.ok("missing" in cmd && /jail/.test(cmd.missing));
+    const noClient = frameCommand({ ...tools, jail: { client: null, socket: "/nonexistent.sock" } }, [], "linux");
+    assert.ok("missing" in noClient && /ffjail/.test(noClient.missing));
+  });
+
+  it("counts a jail that couldn't start ffmpeg as no poster, not a refused file", async () => {
+    const client = join(dir, "fake-ffjail");
+    writeFileSync(client, "#!/bin/sh\necho 'ffjail: seccomp: Invalid argument' >&2\nexit 125\n", { mode: 0o755 });
+    writeFileSync(join(dir, "jail.sock"), "");
+    writeFileSync(join(dir, "input"), "");
+    const tools = { ffmpeg: null, prlimit: null, jail: { client, socket: join(dir, "jail.sock") } };
+    const grabbed = await grabFrame(join(dir, "input"), tools);
+    assert.deepEqual(grabbed, { ok: false, refused: false, reason: "ffjail: seccomp: Invalid argument" });
+  });
+
+  it("looks for ffjail only when the image names a socket", () => {
+    assert.equal(findFrameTools("", undefined).jail, undefined);
+    assert.deepEqual(findFrameTools("", "/run/x.sock").jail, { client: null, socket: "/run/x.sock" });
+  });
+
   it("runs ffmpeg directly on a dev machine without prlimit", () => {
     const cmd = frameCommand({ ffmpeg: "/opt/homebrew/bin/ffmpeg", prlimit: null }, ["-x"], "darwin");
     assert.deepEqual(cmd, { cmd: "/opt/homebrew/bin/ffmpeg", argv: ["-x"] });

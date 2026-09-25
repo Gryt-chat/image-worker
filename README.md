@@ -28,13 +28,26 @@ A video's poster is one frame that ffmpeg grabs and sharp turns into a JPEG.
 The worker opens the file and hands ffmpeg the open descriptor, so ffmpeg never
 opens a path itself. It may only use the mov/mp4 and matroska/webm demuxers and
 the h264, hevc, vp8, vp9 and AV1 (libdav1d) decoders. It runs on one thread
-under `prlimit` with a 1 GiB address-space cap, and it's killed after 15
-seconds. The flags are in `src/videoPoster.ts`.
+with a 1 GiB address-space cap, and it's killed after 15 seconds. The flags are
+in `src/videoPoster.ts`.
 
 The Docker image builds its own static ffmpeg with nothing else in it: those
 two demuxers, those decoders, the PNG encoder, and the `fd` and `pipe`
 protocols. The versions and hashes are at the top of the `Dockerfile`, and a
 new ffmpeg release means bumping them by hand.
+
+In the image, ffmpeg doesn't run as the worker. The container starts as root
+just long enough for `jail/entrypoint.sh` to start `ffjail`, and then the
+worker runs as `gryt`. ffjail runs each decode as a second user, `gryt-ff`,
+inside an empty chroot. There's no `/proc`, `/data` or `/app` in there to read.
+ffmpeg gets an empty environment, no capabilities, the 1 GiB cap, and a
+seccomp filter that refuses sockets, ptrace and new processes. All it has is
+the input as fd 3 and a pipe for the PNG. `test/image` checks that on every
+pull request, with a probe that tries to read the worker's environment and
+storage from inside the jail.
+
+If you start the container as a non-root user, the jail can't start, and
+videos don't get a poster. The image never runs ffmpeg outside the jail.
 
 Without ffmpeg, on a dev machine or your own build, videos just don't get a
 poster. A system ffmpeg has to be 6.0 or newer, for the `fd` protocol. On Linux

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessByStdio } from "child_process";
-import { accessSync, constants } from "fs";
+import { accessSync, constants, existsSync } from "fs";
 import { mkdtemp, open, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { delimiter, join } from "path";
@@ -21,9 +21,14 @@ const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 const MAX_INPUT_PIXELS = 100_000_000;
 const POSTER_WIDTH = 320;
 
+/** ffjail's exit code when ffmpeg never ran: no jail to reach, or the jail couldn't start it. */
+export const JAIL_FAILED = 125;
+
 export interface FrameTools {
   ffmpeg: string | null;
   prlimit: string | null;
+  /** Set in the Docker image, where ffmpeg only runs inside jail/ffjail.c. */
+  jail?: { client: string | null; socket: string };
 }
 
 export type FrameResult =
@@ -44,8 +49,10 @@ export function findExecutable(name: string, pathEnv = process.env.PATH ?? ""): 
   return null;
 }
 
-export function findFrameTools(pathEnv?: string): FrameTools {
-  return { ffmpeg: findExecutable("ffmpeg", pathEnv), prlimit: findExecutable("prlimit", pathEnv) };
+export function findFrameTools(pathEnv?: string, jailSocket = process.env.FFJAIL_SOCKET): FrameTools {
+  const tools = { ffmpeg: findExecutable("ffmpeg", pathEnv), prlimit: findExecutable("prlimit", pathEnv) };
+  if (!jailSocket) return tools;
+  return { ...tools, jail: { client: findExecutable("ffjail", pathEnv), socket: jailSocket } };
 }
 
 /** The input is fd 3, so ffmpeg never opens a path. Everything before `-i` confines it.
@@ -75,7 +82,14 @@ export function frameCommand(
   args: string[],
   platform: NodeJS.Platform = process.platform,
   memoryBytes = FFMPEG_MEMORY_BYTES,
+  timeoutMs = FFMPEG_TIMEOUT_MS,
 ): { cmd: string; argv: string[] } | { missing: string } {
+  if (tools.jail) {
+    const { client, socket } = tools.jail;
+    if (!client) return { missing: "ffjail is not installed" };
+    if (!existsSync(socket)) return { missing: "the ffmpeg jail isn't running" };
+    return { cmd: client, argv: ["run", socket, String(memoryBytes), String(timeoutMs), "--", ...args] };
+  }
   if (!tools.ffmpeg) return { missing: "ffmpeg is not installed" };
   if (tools.prlimit) {
     return { cmd: tools.prlimit, argv: [`--as=${memoryBytes}`, "--", tools.ffmpeg, ...args] };
@@ -162,7 +176,7 @@ export async function grabFrame(
   { timeoutMs = FFMPEG_TIMEOUT_MS, memoryBytes = FFMPEG_MEMORY_BYTES } = {},
 ): Promise<FrameResult> {
   for (const seek of [1, 0]) {
-    const command = frameCommand(tools, ffmpegArgs(seek), process.platform, memoryBytes);
+    const command = frameCommand(tools, ffmpegArgs(seek), process.platform, memoryBytes, timeoutMs);
     if ("missing" in command) return { ok: false, refused: false, reason: command.missing };
 
     let result: RunResult;
@@ -174,6 +188,9 @@ export async function grabFrame(
 
     if (result.timedOut) return { ok: false, refused: true, reason: `ffmpeg ran past ${timeoutMs}ms` };
     if (result.tooBig) return { ok: false, refused: true, reason: "ffmpeg's frame was over the size cap" };
+    if (tools.jail && result.code === JAIL_FAILED) {
+      return { ok: false, refused: false, reason: describeFailure(result.stderr) };
+    }
     if (result.code !== 0) {
       return { ok: false, refused: true, reason: describeFailure(result.stderr) };
     }
