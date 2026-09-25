@@ -25,14 +25,21 @@ read line by line.
 ## Video posters
 
 A video's poster is one frame that ffmpeg grabs and sharp turns into a JPEG.
-ffmpeg may only open a local file, the mov/mp4 and matroska/webm demuxers, and
+The worker opens the file and hands ffmpeg the open descriptor, so ffmpeg never
+opens a path itself. It may only use the mov/mp4 and matroska/webm demuxers and
 the h264, hevc, vp8, vp9 and AV1 (libdav1d) decoders. It runs on one thread
 under `prlimit` with a 1 GiB address-space cap, and it's killed after 15
 seconds. The flags are in `src/videoPoster.ts`.
 
-The Docker image ships ffmpeg. Without it, on a dev machine or your own build,
-videos just don't get a poster. On Linux the worker also needs `prlimit` from
-util-linux, and it skips posters rather than run ffmpeg without the cap.
+The Docker image builds its own static ffmpeg with nothing else in it: those
+two demuxers, those decoders, the PNG encoder, and the `fd` and `pipe`
+protocols. The versions and hashes are at the top of the `Dockerfile`, and a
+new ffmpeg release means bumping them by hand.
+
+Without ffmpeg, on a dev machine or your own build, videos just don't get a
+poster. A system ffmpeg has to be 6.0 or newer, for the `fd` protocol. On Linux
+the worker also needs `prlimit` from util-linux, and it skips posters rather
+than run ffmpeg without the cap.
 
 ## Configuration
 

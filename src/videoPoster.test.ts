@@ -36,12 +36,13 @@ function lavfi(seconds: number): string[] {
 
 describe("the ffmpeg command", () => {
   it("confines the input before it is opened", () => {
-    const args = ffmpegArgs("/tmp/x/input", 1);
+    const args = ffmpegArgs(1);
     const input = args.indexOf("-i");
     const before = args.slice(0, input);
 
     for (const [flag, value] of [
-      ["-protocol_whitelist", "file"],
+      ["-protocol_whitelist", "fd"],
+      ["-fd", "3"],
       ["-format_whitelist", "mov,mp4,matroska,webm"],
       ["-codec_whitelist", "h264,hevc,vp8,vp9,libdav1d"],
       ["-threads", "1"],
@@ -50,7 +51,7 @@ describe("the ffmpeg command", () => {
     }
     assert.equal(FORMAT_WHITELIST, "mov,mp4,matroska,webm");
     assert.equal(CODEC_WHITELIST, "h264,hevc,vp8,vp9,libdav1d");
-    assert.equal(args[input + 1], "file:/tmp/x/input", "the input is a local file, never a URL");
+    assert.equal(args[input + 1], "fd:", "the input is fd 3, never a path or a URL");
     assert.equal(args[args.indexOf("-frames:v") + 1], "1");
     assert.equal(args[args.lastIndexOf("-threads") + 1], "1", "the encoder threads too");
     assert.ok(args.lastIndexOf("-threads") > input);
@@ -58,8 +59,8 @@ describe("the ffmpeg command", () => {
   });
 
   it("seeks no later than one second", () => {
-    assert.equal(ffmpegArgs("/in", 1)[ffmpegArgs("/in", 1).indexOf("-ss") + 1], "1");
-    assert.equal(ffmpegArgs("/in", 0)[ffmpegArgs("/in", 0).indexOf("-ss") + 1], "0");
+    assert.equal(ffmpegArgs(1)[ffmpegArgs(1).indexOf("-ss") + 1], "1");
+    assert.equal(ffmpegArgs(0)[ffmpegArgs(0).indexOf("-ss") + 1], "0");
   });
 
   it("runs under prlimit when there is one", () => {
