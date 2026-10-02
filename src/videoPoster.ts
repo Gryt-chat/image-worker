@@ -7,6 +7,7 @@ import type { Readable } from "stream";
 import sharp from "sharp";
 
 import { getObjectToFile, putObject } from "./storage";
+import { desktopVideoFrame } from "./desktopVideo";
 
 /** The only demuxers, decoders and protocol ffmpeg may open. AV1 is `libdav1d`:
     the decoder named `av1` only drives hardware. */
@@ -29,6 +30,7 @@ export interface FrameTools {
   prlimit: string | null;
   /** Set in the Docker image, where ffmpeg only runs inside jail/ffjail.c. */
   jail?: { client: string | null; socket: string };
+  desktop?: boolean;
 }
 
 export type FrameResult =
@@ -50,7 +52,8 @@ export function findExecutable(name: string, pathEnv = process.env.PATH ?? ""): 
 }
 
 export function findFrameTools(pathEnv?: string, jailSocket = process.env.FFJAIL_SOCKET): FrameTools {
-  const tools = { ffmpeg: findExecutable("ffmpeg", pathEnv), prlimit: findExecutable("prlimit", pathEnv) };
+  const tools: FrameTools = { ffmpeg: findExecutable("ffmpeg", pathEnv), prlimit: findExecutable("prlimit", pathEnv) };
+  if (process.env.GRYT_VIDEO_DECODER === "electron-sandbox" && process.connected) tools.desktop = true;
   if (!jailSocket) return tools;
   return { ...tools, jail: { client: findExecutable("ffjail", pathEnv), socket: jailSocket } };
 }
@@ -219,16 +222,21 @@ export async function processUploadedVideo(
   rawKey: string,
   tools: FrameTools,
 ): Promise<PosterResult> {
+  if (rawKey.startsWith("quarantine/") && !tools.jail && !tools.desktop) {
+    return { thumbKey: null, refused: true, reason: "Uploaded videos require an isolated decoder" };
+  }
   // Checked before the download: without the tools there is nothing to fetch it for.
   const usable = frameCommand(tools, []);
-  if ("missing" in usable) return { thumbKey: null, refused: false, reason: usable.missing };
+  if (!tools.desktop && "missing" in usable) return { thumbKey: null, refused: rawKey.startsWith("quarantine/"), reason: usable.missing };
 
   const dir = await mkdtemp(join(tmpdir(), "gryt-poster-"));
   try {
     const inputPath = join(dir, "input");
     await getObjectToFile(bucket, rawKey, inputPath);
 
-    const grabbed = await grabFrame(inputPath, tools);
+    const grabbed: FrameResult = tools.desktop
+      ? await desktopVideoFrame(inputPath).then((frame) => ({ ok: true as const, frame }), (error: Error) => ({ ok: false as const, refused: true, reason: error.message }))
+      : await grabFrame(inputPath, tools);
     if (!grabbed.ok) return { thumbKey: null, refused: grabbed.refused, reason: grabbed.reason };
 
     const poster = await posterFromFrame(grabbed.frame);

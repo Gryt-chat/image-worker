@@ -113,6 +113,17 @@ describe("the ffmpeg command", () => {
 });
 
 describe("without ffmpeg", () => {
+  it("refuses quarantined banners rather than treating missing ffmpeg as success", async () => {
+    const result = await processUploadedVideo("test", "banner", "quarantine/banners/banner", { ffmpeg: null, prlimit: null });
+    assert.equal(result.thumbKey, null);
+    assert.equal(result.refused, true);
+    assert.equal(result.reason, "Uploaded videos require an isolated decoder");
+  });
+  it("does not approve banner videos using an unconfined system ffmpeg", async () => {
+    const result = await processUploadedVideo("test", "banner", "quarantine/banners/banner", { ffmpeg: "/usr/bin/ffmpeg", prlimit: null });
+    assert.equal(result.refused, true);
+    assert.equal(result.reason, "Uploaded videos require an isolated decoder");
+  });
   it("finds nothing on an empty PATH", () => {
     assert.deepEqual(findFrameTools(""), { ffmpeg: null, prlimit: null });
   });

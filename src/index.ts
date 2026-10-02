@@ -14,7 +14,7 @@ import {
   updateImageJobStatus,
 } from "./db";
 import { findDominantColor, processUploadedImage } from "./processImage";
-import { getObjectAsBuffer, initStorage, putObject } from "./storage";
+import { deleteObject, getObjectAsBuffer, initStorage, putObject } from "./storage";
 import { findFrameTools, processUploadedVideo } from "./videoPoster";
 
 function clampInt(
@@ -120,6 +120,9 @@ async function runOne(jobId: string): Promise<void> {
     }
 
     updateImageJobStatus({ job_id: jobId, status: "done" });
+    if (job.raw_s3_key.startsWith("quarantine/banners/") && result.newKey) {
+      await deleteObject(bucket, job.raw_s3_key).catch((error) => consola.warn("Banner raw cleanup failed", error));
+    }
     processedCount++;
     consola.info(
       `[ImageWorker] Job ${jobId} done (file=${job.file_id}, compressed=${result.compressed}, thumb=${!!result.thumbKey})`,
@@ -142,6 +145,9 @@ async function runOne(jobId: string): Promise<void> {
    finishes the job with no poster, which is what a video had before. */
 async function runPosterJob(jobId: string, fileId: string, rawKey: string, bucket: string): Promise<void> {
   const poster = await processUploadedVideo(bucket, fileId, rawKey, frameTools);
+  if (rawKey.startsWith("quarantine/") && !poster.thumbKey) {
+    throw new Error(poster.reason || "Uploaded video could not be decoded");
+  }
   if (poster.thumbKey) updateFileRecord(fileId, { thumbnail_key: poster.thumbKey });
 
   if (poster.refused) {

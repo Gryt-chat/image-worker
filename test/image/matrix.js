@@ -103,6 +103,26 @@ async function main() {
     assert.equal(after, before);
   });
 
+  for (const area of ["banners", "uploads"]) {
+    await check(`decodes quarantined ${area} videos through the jail`, async () => {
+      const key = `quarantine/${area}/video.mp4`;
+      fs.mkdirSync(`/data/gryt/quarantine/${area}`, { recursive: true });
+      fs.copyFileSync(at("h264-aac.mp4"), `/data/gryt/${key}`);
+      const result = await vp.processUploadedVideo("gryt", `quarantined-${area}`, key, tools);
+      assert.equal(result.refused, false, result.reason);
+      assert.equal(result.thumbKey, `thumbnails/quarantined-${area}.jpg`);
+      assert.equal((await sharp(`/data/gryt/${result.thumbKey}`).metadata()).format, "jpeg");
+    });
+    await check(`rejects malformed quarantined ${area} videos`, async () => {
+      const key = `quarantine/${area}/bad.mp4`;
+      fs.copyFileSync(at("random.mp4"), `/data/gryt/${key}`);
+      const result = await vp.processUploadedVideo("gryt", `bad-${area}`, key, tools);
+      assert.equal(result.refused, true);
+      assert.equal(result.thumbKey, null);
+      assert.equal(fs.existsSync(`/data/gryt/thumbnails/bad-${area}.jpg`), false);
+    });
+  }
+
   if (!tools.jail) {
     console.log("no jail in this image, so the isolation checks are skipped");
   } else {
