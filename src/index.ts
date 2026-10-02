@@ -145,8 +145,8 @@ async function runOne(jobId: string): Promise<void> {
    finishes the job with no poster, which is what a video had before. */
 async function runPosterJob(jobId: string, fileId: string, rawKey: string, bucket: string): Promise<void> {
   const poster = await processUploadedVideo(bucket, fileId, rawKey, frameTools);
-  if (rawKey.startsWith("quarantine/banners/") && !poster.thumbKey) {
-    throw new Error(poster.reason || "Banner video could not be decoded");
+  if (rawKey.startsWith("quarantine/") && !poster.thumbKey) {
+    throw new Error(poster.reason || "Uploaded video could not be decoded");
   }
   if (poster.thumbKey) updateFileRecord(fileId, { thumbnail_key: poster.thumbKey });
 

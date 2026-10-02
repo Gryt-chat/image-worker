@@ -16,9 +16,10 @@ test("the worker approves re-encoded banners and rejects bad media without ffmpe
     CREATE TABLE server_config (id TEXT PRIMARY KEY, upload_max_bytes INTEGER, avatar_thumb_px INTEGER);
     INSERT INTO server_config VALUES ('config', 1048576, NULL);`);
   await mkdir(join(dir, "test/quarantine/banners"), { recursive: true });
+  await mkdir(join(dir, "test/quarantine/uploads"), { recursive: true });
   const png = await sharp({ create: { width: 30, height: 20, channels: 3, background: "red" } }).png().toBuffer();
-  for (const [id, bytes, type] of [["valid", png, "image/png"], ["bad-image", Buffer.from("fake image"), "image/png"], ["no-decoder", Buffer.from("fake video"), "video/mp4"]] as const) {
-    const key = `quarantine/banners/${id}`;
+  for (const [id, bytes, type] of [["valid", png, "image/png"], ["bad-image", Buffer.from("fake image"), "image/png"], ["no-decoder", Buffer.from("fake video"), "video/mp4"], ["chat-picture", png, "image/png"], ["chat-video", Buffer.from("fake video"), "video/mp4"]] as const) {
+    const key = `quarantine/${id.startsWith("chat-") ? "uploads" : "banners"}/${id}`;
     await writeFile(join(dir, "test", key), bytes);
     db.prepare("INSERT INTO files VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)").run(id, key, type, bytes.length, new Date().toISOString());
     db.prepare("INSERT INTO image_jobs VALUES (?, ?, 'queued', ?, ?, ?, NULL, ?, ?)").run(id, id, key, type, bytes.length, new Date().toISOString(), new Date().toISOString());
@@ -43,6 +44,8 @@ test("the worker approves re-encoded banners and rejects bad media without ffmpe
     assert.equal(status("valid"), "done", log);
     assert.equal(status("bad-image"), "error", log);
     assert.equal(status("no-decoder"), "error", log);
+    assert.equal(status("chat-picture"), "done", log);
+    assert.equal(status("chat-video"), "error", log);
     const stored = db.prepare("SELECT s3_key FROM files WHERE file_id = 'valid'").get() as { s3_key: string };
     assert.equal(stored.s3_key, "banners/verified/valid.webp");
     assert.equal((await sharp(await readFile(join(dir, "test", stored.s3_key))).metadata()).width, 960);

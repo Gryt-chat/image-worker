@@ -219,12 +219,12 @@ export async function processUploadedVideo(
   rawKey: string,
   tools: FrameTools,
 ): Promise<PosterResult> {
-  if (rawKey.startsWith("quarantine/banners/") && !tools.jail) {
-    return { thumbKey: null, refused: true, reason: "Banner videos require an isolated decoder" };
+  if (rawKey.startsWith("quarantine/") && !tools.jail) {
+    return { thumbKey: null, refused: true, reason: "Uploaded videos require an isolated decoder" };
   }
   // Checked before the download: without the tools there is nothing to fetch it for.
   const usable = frameCommand(tools, []);
-  if ("missing" in usable) return { thumbKey: null, refused: rawKey.startsWith("quarantine/banners/"), reason: usable.missing };
+  if ("missing" in usable) return { thumbKey: null, refused: rawKey.startsWith("quarantine/"), reason: usable.missing };
 
   const dir = await mkdtemp(join(tmpdir(), "gryt-poster-"));
   try {

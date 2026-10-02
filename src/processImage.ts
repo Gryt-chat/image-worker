@@ -48,7 +48,7 @@ export async function processUploadedImage(
   rawBytes: number,
   maxBytes: number,
 ): Promise<ProcessResult> {
-  if (rawKey.startsWith("quarantine/banners/") && (rawBytes > 64 * 1024 * 1024 || (maxBytes > 0 && rawBytes > maxBytes))) {
+  if (rawKey.startsWith("quarantine/") && (rawBytes > 64 * 1024 * 1024 || (maxBytes > 0 && rawBytes > maxBytes))) {
     throw new Error("Banner exceeds processing limit");
   }
   const rawBuffer = await getObjectAsBuffer(bucket, rawKey);
@@ -68,6 +68,9 @@ export async function processUploadedImage(
     limitInputPixels: MAX_INPUT_PIXELS,
     ...(isPotentiallyAnimated ? { animated: true } : {}),
   }).metadata();
+  if (rawKey.startsWith("quarantine/") && (!meta.format || !["jpeg", "png", "gif", "webp", "avif", "heif", "tiff"].includes(meta.format))) {
+    throw new Error("Unsupported image format");
+  }
 
   const isAnimated =
     isPotentiallyAnimated &&
@@ -105,6 +108,7 @@ export async function processUploadedImage(
     .avif({ quality: 50 })
     .toBuffer()
     .catch(() => null);
+  if (rawKey.startsWith("quarantine/") && !thumb) throw new Error("Image could not be decoded");
 
   if (thumb) {
     thumbKey = `thumbnails/${fileId}.avif`;
