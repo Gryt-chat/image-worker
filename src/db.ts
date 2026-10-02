@@ -1,4 +1,5 @@
 import consola from "consola";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import {
@@ -12,6 +13,14 @@ let db: DatabaseSync | null = null;
 function getDb(): DatabaseSync {
   if (!db) throw new Error("DB not initialized. Call initDb() first.");
   return db;
+}
+
+export function recordMediaDetection(fileId: string, sha256: string, signature: string): void {
+  const db = getDb();
+  const file = db.prepare("SELECT uploaded_by_server_user_id AS uploader FROM files WHERE file_id = ?").get(fileId) as { uploader: string | null } | undefined;
+  const eventId = createHash("sha256").update(`media.scan_detection:${fileId}:${sha256}`).digest("hex");
+  db.prepare("INSERT OR IGNORE INTO audit_log (event_id, actor_server_user_id, action, target, meta_json, created_at) VALUES (?, NULL, ?, ?, ?, ?)")
+    .run(eventId, "media.scan_detection", fileId, JSON.stringify({ uploader: file?.uploader ?? null, sha256, scanner: "clamav", signature, automatic: true }), new Date().toISOString());
 }
 
 export function initDb(): void {

@@ -1,6 +1,6 @@
 import consola from "consola";
 import http from "http";
-import sharp from "sharp";
+import { createHash } from "node:crypto";
 
 import {
   getImageJob,
@@ -12,7 +12,11 @@ import {
   listQueuedImageJobIds,
   updateFileRecord,
   updateImageJobStatus,
+  recordMediaDetection,
 } from "./db";
+import { MalwareDetected, scanMedia } from "./malwareScan";
+import { checkMediaSize } from "./reconstructImage";
+import { reconstructUploadedImage } from "./imageDecoder";
 import { findDominantColor, processUploadedImage } from "./processImage";
 import { deleteObject, getObjectAsBuffer, initStorage, putObject } from "./storage";
 import { findFrameTools, processUploadedVideo } from "./videoPoster";
@@ -79,6 +83,18 @@ async function runOne(jobId: string): Promise<void> {
     if (!job || job.status !== "queued") return;
 
     updateImageJobStatus({ job_id: jobId, status: "processing" });
+    if (job.raw_s3_key.startsWith("quarantine/")) checkMediaSize(job.raw_bytes, getUploadMaxBytes());
+
+    if (job.raw_s3_key.startsWith("quarantine/") && process.env.CLAMD_SOCKET) {
+      const bytes = await getObjectAsBuffer(bucket, job.raw_s3_key);
+      checkMediaSize(bytes.length, getUploadMaxBytes());
+      try {
+        await scanMedia(bytes, process.env.CLAMD_SOCKET);
+      } catch (error) {
+        if (error instanceof MalwareDetected) recordMediaDetection(job.file_id, createHash("sha256").update(bytes).digest("hex"), error.signature);
+        throw error;
+      }
+    }
 
     if (job.raw_content_type.toLowerCase().startsWith("video/")) {
       await runPosterJob(jobId, job.file_id, job.raw_s3_key, bucket);
@@ -120,8 +136,8 @@ async function runOne(jobId: string): Promise<void> {
     }
 
     updateImageJobStatus({ job_id: jobId, status: "done" });
-    if (job.raw_s3_key.startsWith("quarantine/banners/") && result.newKey) {
-      await deleteObject(bucket, job.raw_s3_key).catch((error) => consola.warn("Banner raw cleanup failed", error));
+    if (result.newKey && result.newKey !== job.raw_s3_key) {
+      await deleteObject(bucket, job.raw_s3_key).catch((error) => consola.warn("Media raw cleanup failed", error));
     }
     processedCount++;
     consola.info(
@@ -258,14 +274,7 @@ async function upgradeAvatarThumbnails(): Promise<void> {
       // From the stored avatar, not by upscaling the old thumbnail — that would
       // produce the right number of pixels and no more detail.
       const source = await getObjectAsBuffer(bucket, avatar.s3_key);
-      const animated = avatar.mime === "image/gif" || avatar.mime === "image/webp";
-      const thumb = await sharp(source, {
-        failOn: "error",
-        ...(animated ? { pages: 1 } : {}),
-      })
-        .resize({ width: targetPx, height: targetPx, fit: "cover" })
-        .avif({ quality: 50 })
-        .toBuffer();
+      const { thumb } = await reconstructUploadedImage(source, 0, false, targetPx, "avatar-thumb");
 
       await putObject(bucket, avatar.thumbnail_key, thumb, "image/avif");
       updateFileRecord(avatar.file_id, { thumbnail_px: targetPx });
@@ -303,6 +312,8 @@ function startHealthServer(): void {
         rethumbed: rethumbedCount,
         errors: errorCount,
         inFlight,
+        malwareScanning: process.env.CLAMD_SOCKET ? "configured" : "disabled",
+        rasterIsolation: process.env.IMAGEJAIL_SOCKET ? "configured" : "unavailable",
       }),
     );
   });
@@ -316,6 +327,7 @@ function startHealthServer(): void {
 async function main(): Promise<void> {
   consola.info(`[ImageWorker] Starting v${version}...`);
   consola.info(`[ImageWorker] concurrency=${concurrency}, pollMs=${pollMs}`);
+  if (!process.env.CLAMD_SOCKET) consola.warn("[ImageWorker] Malware scanning disabled: CLAMD_SOCKET is not configured");
   consola.info(
     frameTools.jail
       ? `[ImageWorker] Video posters: ffmpeg in the jail at ${frameTools.jail.socket}, ffjail=${frameTools.jail.client ?? "none"}`

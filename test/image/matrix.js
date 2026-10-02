@@ -59,6 +59,26 @@ async function main() {
   console.log(`tools: ${JSON.stringify(tools)}`);
   fs.writeFileSync("/data/gryt.db", "gryt-ff-canary database\n");
 
+  await check("reconstructs banners in the raster jail", async () => {
+    const decoder = require("/app/dist/imageDecoder.js");
+    const bytes = await sharp({ create: { width: 100, height: 70, channels: 3, background: "red" } }).png().toBuffer();
+    const result = await decoder.reconstructUploadedImage(bytes, 1048576, true);
+    assert.equal((await sharp(result.body).metadata()).width, 960);
+    assert.notDeepEqual(result.body, bytes);
+    await assert.rejects(decoder.reconstructUploadedImage(Buffer.from("invalid"), 1048576, true));
+  });
+  await check("raster jail blocks storage, credentials, network and subprocesses", async () => {
+    const script = `const fs=require("fs");const net=require("net");const cp=require("child_process");
+      let storage=false,network=false,processes=false;
+      try{fs.readFileSync("/data/gryt.db");}catch(e){storage=e.code==="ENOENT";}
+      try{net.createConnection({host:"127.0.0.1",port:80}).on("error",e=>{network=e.code==="EPERM";done();});}catch(e){network=e.code==="EPERM";}
+      const p=cp.spawnSync("/usr/local/bin/node",["-e","0"]);processes=!!p.error;
+      function done(){console.log(JSON.stringify({storage,network,processes,secret:process.env.S3_SECRET_ACCESS_KEY||null}));}`;
+    const result = await vp.runDecoder("/usr/local/bin/ffjail", ["run", process.env.IMAGEJAIL_SOCKET, String(16 * 1024 * 1024 * 1024), "5000", "--", "--jitless", "--disable-wasm-trap-handler", "-e", script], at("h264-aac.mp4"), 6000);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { storage: true, network: true, processes: true, secret: null });
+  });
+
   for (const name of posters) {
     await check(`poster from ${name}`, async () => {
       const started = Date.now();

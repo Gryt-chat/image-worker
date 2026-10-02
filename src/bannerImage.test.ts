@@ -45,15 +45,37 @@ test("rejects malformed bytes, SVG and files above the operator limit", async ()
   await assert.rejects(processBannerImage("test", "big", Buffer.alloc(100), 50), /processing limit/);
 });
 
-test("compresses a new chat image only when the output saves storage", async () => {
+test("reconstructs a new chat image before publishing", async () => {
   const bytes = await sharp({ create: { width: 1000, height: 700, channels: 3, background: "green" } }).png().toBuffer();
   const key = "quarantine/uploads/chat.png";
   await putObject("test", key, bytes, "image/png");
   const result = await processUploadedImage("test", "chat", key, "image/png", bytes.length, 1024 * 1024);
   assert.equal(result.compressed, true);
-  assert.equal(result.newMime, "image/avif");
-  assert.ok(result.newSize! < bytes.length);
+  assert.equal(result.newMime, "image/webp");
+  assert.equal(result.newKey, "uploads/chat.webp");
   const output = await sharp(await getObjectAsBuffer("test", result.newKey!)).metadata();
   assert.equal(output.width, 1000);
   assert.equal(output.height, 700);
+});
+
+test("reconstructs small images, strips appended bytes and ignores claimed MIME", async () => {
+  const png = await sharp({ create: { width: 1, height: 1, channels: 3, background: "red" } }).png().toBuffer();
+  const bytes = Buffer.concat([png, Buffer.from("untrusted trailing payload")]);
+  await putObject("test", "quarantine/uploads/small", bytes);
+  const result = await processUploadedImage("test", "small", "quarantine/uploads/small", "image/gif", bytes.length, 1024 * 1024);
+  const body = await getObjectAsBuffer("test", result.newKey!);
+  assert.equal(result.newMime, "image/webp");
+  assert.equal(body.includes(Buffer.from("untrusted trailing payload")), false);
+  assert.notDeepEqual(body, bytes);
+});
+
+test("reconstructs every frame of a chat GIF rather than publishing the original", async () => {
+  const pixels = Buffer.alloc(20 * 40 * 3, 128);
+  pixels.fill(255, 20 * 20 * 3);
+  const bytes = await sharp(pixels, { raw: { width: 20, height: 40, channels: 3, pageHeight: 20 } }).gif({ delay: [100, 200], loop: 0 }).toBuffer();
+  await putObject("test", "quarantine/uploads/animation", bytes);
+  const result = await processUploadedImage("test", "animation", "quarantine/uploads/animation", "image/gif", bytes.length, 1024 * 1024);
+  const body = await getObjectAsBuffer("test", result.newKey!);
+  assert.equal((await sharp(body, { animated: true }).metadata()).pages, 2);
+  assert.notDeepEqual(body, bytes);
 });
