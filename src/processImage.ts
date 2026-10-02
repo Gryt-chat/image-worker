@@ -48,7 +48,14 @@ export async function processUploadedImage(
   rawBytes: number,
   maxBytes: number,
 ): Promise<ProcessResult> {
+  if (rawKey.startsWith("quarantine/banners/") && (rawBytes > 64 * 1024 * 1024 || (maxBytes > 0 && rawBytes > maxBytes))) {
+    throw new Error("Banner exceeds processing limit");
+  }
   const rawBuffer = await getObjectAsBuffer(bucket, rawKey);
+
+  if (rawKey.startsWith("quarantine/banners/")) {
+    return processBannerImage(bucket, fileId, rawBuffer, maxBytes);
+  }
 
   const mimeStr = rawContentType.toLowerCase();
   const isGif = mimeStr === "image/gif";
@@ -116,3 +123,26 @@ export async function processUploadedImage(
   };
 }
 
+export async function processBannerImage(bucket: string, fileId: string, bytes: Buffer, maxBytes: number): Promise<ProcessResult> {
+  if (bytes.length > 64 * 1024 * 1024 || (maxBytes > 0 && bytes.length > maxBytes)) throw new Error("Banner exceeds processing limit");
+  const rasterHeader = bytes.subarray(0, 3).equals(Buffer.from([255, 216, 255]))
+    || bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    || /^GIF8[79]a/.test(bytes.subarray(0, 6).toString("ascii"))
+    || (bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP")
+    || (bytes.subarray(4, 8).toString("ascii") === "ftyp" && /avif|avis/.test(bytes.subarray(8, 32).toString("ascii")));
+  if (!rasterHeader) throw new Error("Unsupported banner format");
+  const options = { failOn: "error" as const, limitInputPixels: MAX_INPUT_PIXELS, animated: true };
+  const metadata = await sharp(bytes, options).metadata();
+  if (!metadata.format || !["jpeg", "png", "gif", "webp", "avif", "heif"].includes(metadata.format)) throw new Error("Unsupported banner format");
+  const animated = (metadata.pages ?? 1) > 1;
+  // Re-encode every frame rather than exposing an untrusted original.
+  const body = await sharp(bytes, options).resize({ width: 960, height: 384, fit: "cover" }).webp({ quality: 85 }).toBuffer();
+  if (maxBytes > 0 && body.length > maxBytes) throw new Error("Processed banner exceeds upload limit");
+  const newKey = `banners/verified/${fileId}.webp`;
+  const thumbKey = `thumbnails/${fileId}.avif`;
+  const thumb = await sharp(body, { ...options, animated: false, pages: 1 }).resize({ width: 320 }).avif({ quality: 50 }).toBuffer();
+  await putObject(bucket, newKey, body, "image/webp");
+  await putObject(bucket, thumbKey, thumb, "image/avif");
+  return { compressed: true, newKey, newMime: "image/webp", newSize: body.length, thumbKey,
+    dominantColor: await findDominantColor(body, animated) };
+}

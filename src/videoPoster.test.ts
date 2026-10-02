@@ -113,6 +113,12 @@ describe("the ffmpeg command", () => {
 });
 
 describe("without ffmpeg", () => {
+  it("refuses quarantined banners rather than treating missing ffmpeg as success", async () => {
+    const result = await processUploadedVideo("test", "banner", "quarantine/banners/banner", { ffmpeg: null, prlimit: null });
+    assert.equal(result.thumbKey, null);
+    assert.equal(result.refused, true);
+    assert.equal(result.reason, "ffmpeg is not installed");
+  });
   it("finds nothing on an empty PATH", () => {
     assert.deepEqual(findFrameTools(""), { ffmpeg: null, prlimit: null });
   });

@@ -221,7 +221,7 @@ export async function processUploadedVideo(
 ): Promise<PosterResult> {
   // Checked before the download: without the tools there is nothing to fetch it for.
   const usable = frameCommand(tools, []);
-  if ("missing" in usable) return { thumbKey: null, refused: false, reason: usable.missing };
+  if ("missing" in usable) return { thumbKey: null, refused: rawKey.startsWith("quarantine/banners/"), reason: usable.missing };
 
   const dir = await mkdtemp(join(tmpdir(), "gryt-poster-"));
   try {
