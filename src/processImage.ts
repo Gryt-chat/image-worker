@@ -84,9 +84,9 @@ export async function processUploadedImage(
   let newSize: number | null = null;
   const hasLimit = typeof maxBytes === "number" && maxBytes > 0;
 
-  if (!shouldKeepOriginal && hasLimit && rawBytes > maxBytes) {
-    const avifBuf = await sharp(rawBuffer, { failOn: "error" }).avif().toBuffer();
-    if (avifBuf.length <= maxBytes) {
+  if (!shouldKeepOriginal && (rawKey.startsWith("quarantine/") || (hasLimit && rawBytes > maxBytes))) {
+    const avifBuf = await sharp(rawBuffer, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS }).avif({ quality: 85 }).toBuffer();
+    if (avifBuf.length < rawBuffer.length && (!hasLimit || avifBuf.length <= maxBytes)) {
       newKey = `uploads/${fileId}.avif`;
       newMime = "image/avif";
       newSize = avifBuf.length;

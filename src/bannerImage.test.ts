@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import sharp from "sharp";
-import { processBannerImage } from "./processImage";
-import { getObjectAsBuffer, initStorage } from "./storage";
+import { processBannerImage, processUploadedImage } from "./processImage";
+import { getObjectAsBuffer, initStorage, putObject } from "./storage";
 
 let dir: string;
 before(async () => {
@@ -43,4 +43,17 @@ test("rejects malformed bytes, SVG and files above the operator limit", async ()
   await assert.rejects(processBannerImage("test", "fake", Buffer.from("not an image"), 0));
   await assert.rejects(processBannerImage("test", "svg", Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'), 0), /Unsupported banner format/);
   await assert.rejects(processBannerImage("test", "big", Buffer.alloc(100), 50), /processing limit/);
+});
+
+test("compresses a new chat image only when the output saves storage", async () => {
+  const bytes = await sharp({ create: { width: 1000, height: 700, channels: 3, background: "green" } }).png().toBuffer();
+  const key = "quarantine/uploads/chat.png";
+  await putObject("test", key, bytes, "image/png");
+  const result = await processUploadedImage("test", "chat", key, "image/png", bytes.length, 1024 * 1024);
+  assert.equal(result.compressed, true);
+  assert.equal(result.newMime, "image/avif");
+  assert.ok(result.newSize! < bytes.length);
+  const output = await sharp(await getObjectAsBuffer("test", result.newKey!)).metadata();
+  assert.equal(output.width, 1000);
+  assert.equal(output.height, 700);
 });
