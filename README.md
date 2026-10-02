@@ -24,8 +24,10 @@ read line by line.
 
 ## Automatic media reconstruction
 
-New quarantined raster uploads are always decoded and reconstructed as WebP,
-including every supported animation frame. The output replaces the uploaded
+New quarantined raster uploads are always decoded and reconstructed,
+including every supported animation frame. Chat images and banners use WebP;
+square avatars and server icons use AVIF, or WebP for animations. Emojis retain
+their aspect ratio without enlarging small inputs. The output replaces the uploaded
 file even when it takes more storage. Banners use a 960×384 crop. Unsupported
 formats, oversized results and processing failures remain unreadable. No person
 has to approve an image.
@@ -43,9 +45,9 @@ must be provided before this change can ship in the desktop server.
 
 Existing files remain readable. Legacy image jobs keep their original unless
 compression is needed and saves storage. Videos still retain their original:
-poster extraction does not reconstruct a complete video. Avatars, emojis and
-server pictures uploaded through the server's own processing paths still need
-to move to the worker.
+poster extraction does not reconstruct a complete video. Server PR #269 routes
+avatars, group icons, emojis and server icons through the worker. Deploy this
+worker before that server change; older workers cannot apply these profiles.
 
 ## Malware detections
 
@@ -67,6 +69,10 @@ warning. Its health response distinguishes configured scanning from disabled
 scanning; it does not assert scanner readiness. Reconstruction and scanning
 reduce risk but cannot guarantee a file is malware-free. Encrypted attachments
 remain opaque and cannot be scanned by the server.
+
+The Docker test runs a real ClamAV daemon with a private test signature for the
+harmless EICAR fixture. This tests the scanning protocol and detection handling;
+it does not test deployment or the freshness of official signatures.
 
 ## Video posters
 

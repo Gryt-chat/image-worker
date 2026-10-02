@@ -134,11 +134,15 @@ export function updateFileRecord(
     thumbnail_key?: string | null;
     thumbnail_px?: number | null;
     dominant_color?: string | null;
+    width?: number;
+    height?: number;
   },
 ): void {
   const d = getDb();
   const sets: string[] = [];
   const vals: SQLInputValue[] = [];
+  if (updates.width !== undefined) { sets.push("width = ?"); vals.push(updates.width); }
+  if (updates.height !== undefined) { sets.push("height = ?"); vals.push(updates.height); }
   if (updates.s3_key !== undefined) {
     sets.push("s3_key = ?");
     vals.push(updates.s3_key);

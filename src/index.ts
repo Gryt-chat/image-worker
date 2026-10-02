@@ -118,11 +118,15 @@ async function runOne(jobId: string): Promise<void> {
       size?: number;
       thumbnail_key?: string | null;
       dominant_color?: string | null;
+      width?: number;
+      height?: number;
     } = {};
     if (result.compressed && result.newKey && result.newMime && result.newSize !== null) {
       updates.s3_key = result.newKey;
       updates.mime = result.newMime;
       updates.size = result.newSize;
+      if (result.width) updates.width = result.width;
+      if (result.height) updates.height = result.height;
     }
     if (result.thumbKey) {
       updates.thumbnail_key = result.thumbKey;

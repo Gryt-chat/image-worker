@@ -7,9 +7,10 @@ async function main() {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || !Number.isSafeInteger(thumbWidth) || thumbWidth < 1 || thumbWidth > 1024
     || !["banner", "image", "avatar-thumb", "poster"].includes(process.argv[3])) throw new Error("Invalid decoder request");
   const bytes = readFileSync(3);
+  const transform = JSON.parse(process.argv[5] || "null") ?? undefined;
   const result = process.argv[3] === "poster" ? await reconstructPoster(bytes)
-    : await reconstructImage(bytes, maxBytes, process.argv[3] === "banner", thumbWidth, process.argv[3] === "avatar-thumb");
-  const header = Buffer.from(JSON.stringify({ bodyBytes: result.body.length, thumbBytes: result.thumb.length, dominantColor: result.dominantColor, animated: result.animated }));
+    : await reconstructImage(bytes, maxBytes, process.argv[3] === "banner", thumbWidth, process.argv[3] === "avatar-thumb", transform);
+  const header = Buffer.from(JSON.stringify({ bodyBytes: result.body.length, thumbBytes: result.thumb.length, mime: result.mime, dominantColor: result.dominantColor, animated: result.animated, width: result.width, height: result.height }));
   const size = Buffer.alloc(4);
   size.writeUInt32BE(header.length);
   process.stdout.write(Buffer.concat([size, header, result.body, result.thumb]));
