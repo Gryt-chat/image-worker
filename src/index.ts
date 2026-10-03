@@ -14,7 +14,7 @@ import {
   updateImageJobStatus,
   recordMediaDetection,
 } from "./db";
-import { MalwareDetected, scanMedia } from "./malwareScan";
+import { MalwareDetected, probeScanner, scanMedia } from "./malwareScan";
 import { checkMediaSize } from "./reconstructImage";
 import { reconstructUploadedImage } from "./imageDecoder";
 import { findDominantColor, processUploadedImage } from "./processImage";
@@ -46,6 +46,7 @@ const healthPort = clampInt(process.env.HEALTH_PORT, 8080, 1, 65535);
 const healthHost = readHost(process.env.HEALTH_HOST);
 const backfillMs = clampInt(process.env.IMAGE_WORKER_BACKFILL_MS, 60_000, 5_000, 3_600_000);
 const backfillBatch = clampInt(process.env.IMAGE_WORKER_BACKFILL_BATCH, 20, 1, 200);
+const scannerRequired = process.env.CLAMD_REQUIRED === "1";
 
 /* IMAGE_WORKER_VERSION first: release.yml versions from `git tag` and never
    bumps package.json, so the file reports a stale version rather than none. */
@@ -85,6 +86,7 @@ async function runOne(jobId: string): Promise<void> {
     updateImageJobStatus({ job_id: jobId, status: "processing" });
     if (job.raw_s3_key.startsWith("quarantine/")) checkMediaSize(job.raw_bytes, getUploadMaxBytes());
 
+    if (job.raw_s3_key.startsWith("quarantine/") && scannerRequired && !process.env.CLAMD_SOCKET) throw new Error("Required malware scanner is not configured");
     if (job.raw_s3_key.startsWith("quarantine/") && process.env.CLAMD_SOCKET) {
       const bytes = await getObjectAsBuffer(bucket, job.raw_s3_key);
       checkMediaSize(bytes.length, getUploadMaxBytes());
@@ -297,29 +299,43 @@ async function upgradeAvatarThumbnails(): Promise<void> {
 }
 
 function startHealthServer(): void {
+  let readiness: Promise<boolean> | undefined;
+  let checkedAt = 0;
+  const scannerReady = () => {
+    if (!readiness || Date.now() - checkedAt > 5000) {
+      checkedAt = Date.now();
+      readiness = probeScanner(process.env.CLAMD_SOCKET ?? "");
+    }
+    return readiness;
+  };
   const server = http.createServer((req, res) => {
     const path = (req.url || "/").split("?")[0];
 
-    res.writeHead(200, { "Content-Type": "application/json" });
-
     if (path === "/version") {
+      res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ name: "image-worker", version }));
       return;
     }
 
-    res.end(
-      JSON.stringify({
-        status: "ok",
-        version,
-        processed: processedCount,
-        coloured: colouredCount,
-        rethumbed: rethumbedCount,
-        errors: errorCount,
-        inFlight,
-        malwareScanning: process.env.CLAMD_SOCKET ? "configured" : "disabled",
-        rasterIsolation: process.env.IMAGEJAIL_SOCKET ? "configured" : "unavailable",
-      }),
-    );
+    void scannerReady().then((ready) => {
+      const healthy = (!scannerRequired && !process.env.CLAMD_SOCKET) || ready;
+      res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          status: healthy ? "ok" : "unavailable",
+          version,
+          processed: processedCount,
+          coloured: colouredCount,
+          rethumbed: rethumbedCount,
+          errors: errorCount,
+          inFlight,
+          malwareScanning: process.env.CLAMD_SOCKET ? "configured" : "disabled",
+          scannerRequired,
+          scannerReady: ready,
+          rasterIsolation: process.env.IMAGEJAIL_SOCKET ? "configured" : "unavailable",
+        }),
+      );
+    });
   });
   server.listen(healthPort, healthHost, () => {
     consola.info(
@@ -331,7 +347,10 @@ function startHealthServer(): void {
 async function main(): Promise<void> {
   consola.info(`[ImageWorker] Starting v${version}...`);
   consola.info(`[ImageWorker] concurrency=${concurrency}, pollMs=${pollMs}`);
-  if (!process.env.CLAMD_SOCKET) consola.warn("[ImageWorker] Malware scanning disabled: CLAMD_SOCKET is not configured");
+  if (!process.env.CLAMD_SOCKET) {
+    if (scannerRequired) consola.error("[ImageWorker] Required scanner missing: new media is blocked");
+    else consola.warn("[ImageWorker] Malware scanning disabled: CLAMD_SOCKET is not configured");
+  }
   consola.info(
     frameTools.jail
       ? `[ImageWorker] Video posters: ffmpeg in the jail at ${frameTools.jail.socket}, ffjail=${frameTools.jail.client ?? "none"}`

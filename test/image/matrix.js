@@ -61,7 +61,7 @@ async function main() {
   fs.writeFileSync("/data/gryt.db", "gryt-ff-canary database\n");
 
   await check("real ClamAV accepts clean media and detects EICAR", async () => {
-    const { scanMedia, MalwareDetected } = require("/app/dist/malwareScan.js");
+    const { scanMedia, MalwareDetected, probeScanner } = require("/app/dist/malwareScan.js");
     const dir = fs.mkdtempSync("/data/clam-test-");
     const socket = path.join(dir, "clamd.sock");
     const config = path.join(dir, "clamd.conf");
@@ -79,6 +79,7 @@ async function main() {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       assert.ok(fs.existsSync(socket), log);
+      assert.equal(await probeScanner(socket), true);
       const clean = await sharp({ create: { width: 10, height: 10, channels: 3, background: "green" } }).png().toBuffer();
       await scanMedia(clean, socket);
       await assert.rejects(scanMedia(eicar, socket), (error) => error instanceof MalwareDetected && /Eicar/.test(error.signature));

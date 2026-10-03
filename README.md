@@ -66,7 +66,11 @@ malware event.
 
 Without `CLAMD_SOCKET`, malware scanning is disabled and the worker logs a
 warning. Its health response distinguishes configured scanning from disabled
-scanning; it does not assert scanner readiness. Reconstruction and scanning
+scanning. `scannerReady` checks a bounded ClamAV PING response, cached for five
+seconds. Set `CLAMD_REQUIRED=1` to reject new quarantined media when the socket
+is missing and return HTTP 503 when the scanner is unavailable. PING does not
+verify signature freshness. The draft deployment configuration is in
+[`examples/scanner`](examples/scanner/README.md). Reconstruction and scanning
 reduce risk but cannot guarantee a file is malware-free. Encrypted attachments
 remain opaque and cannot be scanned by the server.
 

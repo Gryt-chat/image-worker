@@ -36,11 +36,12 @@ test("only scanner detections produce private audit events; no media is approved
     db.prepare("INSERT INTO files VALUES (?, ?, 'image/png', ?, NULL, NULL, NULL, ?, 'member-1')").run(id, key, id.length, new Date().toISOString());
     db.prepare("INSERT INTO image_jobs VALUES (?, ?, 'queued', ?, 'image/png', ?, NULL, ?, ?)").run(id, id, key, id.length, new Date().toISOString(), new Date().toISOString());
   }
-  const child = spawn(process.execPath, ["-r", "ts-node/register", "src/index.ts"], {
+  const startWorker = (required = false) => spawn(process.execPath, ["-r", "ts-node/register", "src/index.ts"], {
     cwd: join(__dirname, ".."),
-    env: { ...process.env, CLAMD_SOCKET: socketPath, DATA_DIR: dir, STORAGE_BACKEND: "filesystem", S3_BUCKET: "test", HEALTH_PORT: "18083", IMAGE_WORKER_POLL_MS: "250" },
+    env: { ...process.env, CLAMD_SOCKET: required ? "" : socketPath, CLAMD_REQUIRED: required ? "1" : "0", DATA_DIR: dir, STORAGE_BACKEND: "filesystem", S3_BUCKET: "test", HEALTH_PORT: "18083", IMAGE_WORKER_POLL_MS: "250" },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  let child = startWorker();
   let log = "";
   child.stdout.on("data", (bytes) => { log += bytes; });
   child.stderr.on("data", (bytes) => { log += bytes; });
@@ -73,6 +74,26 @@ test("only scanner detections produce private audit events; no media is approved
     }
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_log").get()?.n, 1);
     assert.equal(db.prepare("SELECT status FROM image_jobs WHERE job_id = 'detected'").get()?.status, "error");
+    const stopped = new Promise((resolve) => child.once("exit", resolve));
+    child.kill("SIGTERM");
+    await stopped;
+    db.prepare("UPDATE image_jobs SET status = 'queued' WHERE job_id = 'scanner-error'").run();
+    child = startWorker(true);
+    child.stdout.on("data", (bytes) => { log += bytes; });
+    child.stderr.on("data", (bytes) => { log += bytes; });
+    const requiredDeadline = Date.now() + 4000;
+    while (Date.now() < requiredDeadline) {
+      if (db.prepare("SELECT status FROM image_jobs WHERE job_id = 'scanner-error'").get()?.status === "error") break;
+      assert.equal(child.exitCode, null, log);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.match(String(db.prepare("SELECT error_message FROM image_jobs WHERE job_id = 'scanner-error'").get()?.error_message), /Required malware scanner is not configured/);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_log").get()?.n, 1);
+    const health = await fetch("http://127.0.0.1:18083/");
+    assert.equal(health.status, 503);
+    const status = await health.json() as { scannerRequired: boolean; scannerReady: boolean };
+    assert.equal(status.scannerRequired, true);
+    assert.equal(status.scannerReady, false);
   } finally {
     const exited = new Promise((resolve) => child.once("exit", resolve));
     if (child.exitCode === null) { child.kill("SIGTERM"); await exited; }

@@ -1,0 +1,44 @@
+services:
+  image-worker:
+    image: ${GRYT_IMAGE_WORKER_IMAGE:?Set the reviewed worker image}
+    restart: unless-stopped
+    environment:
+      DATA_DIR: /data
+      STORAGE_BACKEND: filesystem
+      S3_BUCKET: ${GRYT_MEDIA_BUCKET:?Set the existing media bucket}
+      CLAMD_SOCKET: /run/gryt-clam/clamd.sock
+      CLAMD_REQUIRED: "1"
+    volumes:
+      - media-data:/data
+      - scanner-run:/run/gryt-clam:ro
+    depends_on:
+      clamav:
+        condition: service_healthy
+  clamav:
+    platform: linux/amd64
+    image: ${GRYT_CLAMAV_IMAGE:-clamav/clamav:1.4_base@sha256:90effb795234e6a93b070310a4bab5a58d93d94b9a077a09ce2229947679782b}
+    restart: unless-stopped
+    environment:
+      FRESHCLAM_CHECKS: "24"
+      TZ: UTC
+    volumes:
+      - signatures:/var/lib/clamav
+      - scanner-run:/tmp
+      - ./clamd.conf:/etc/clamav/clamd.conf:ro
+    mem_limit: 4g
+    cpus: 2
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "clamdscan", "--config-file=/etc/clamav/clamd.conf", "--ping=1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10m
+      retries: 3
+volumes:
+  media-data:
+    external: true
+    name: ${GRYT_MEDIA_VOLUME:?Set the existing filesystem media volume}
+  scanner-run:
+  signatures:
