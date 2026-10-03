@@ -48,4 +48,8 @@ jobs:
       - run: docker build -t gryt-ff-worker .
       - run: docker build --build-arg IMAGE=gryt-ff-worker -t gryt-ff-worker-test test/image
       - run: docker run --rm gryt-ff-worker-test
+      - if: matrix.runner == 'ubuntu-latest'
+        run: docker pull --platform linux/amd64 clamav/clamav:1.4_base@sha256:90effb795234e6a93b070310a4bab5a58d93d94b9a077a09ce2229947679782b
+      - if: matrix.runner == 'ubuntu-latest'
+        run: WORKER_IMAGE=gryt-ff-worker node test/scanner/deployment.mjs
       - run: docker image ls gryt-ff-worker

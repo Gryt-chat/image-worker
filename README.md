@@ -22,6 +22,62 @@ attacker-controlled bytes to an image decoder, so it's a review-required path
 in [the AI policy](https://docs.gryt.chat/docs/guide/ai) and changes here get
 read line by line.
 
+## Automatic media reconstruction
+
+New quarantined raster uploads are always decoded and reconstructed,
+including every supported animation frame. Chat images and banners use WebP;
+square avatars and server icons use AVIF, or WebP for animations. Emojis retain
+their aspect ratio without enlarging small inputs. The output replaces the uploaded
+file even when it takes more storage. Banners use a 960×384 crop. Unsupported
+formats, oversized results and processing failures remain unreadable. No person
+has to approve an image.
+
+The Docker raster decoder runs as a separate user in a read-only chroot with
+runtime libraries. It has no database, storage mount, credentials or network.
+The jail also handles colour backfills, avatar thumbnail upgrades and video
+poster reconstruction. A decode has a 30-second deadline and a 256 MiB JavaScript
+heap limit. Native memory is also subject to the container's memory limit; the
+16 GiB address-space ceiling allows Node's virtual-memory reservations.
+
+Production workers refuse raster processing when the jail is unavailable.
+Development builds can decode directly for tests. Desktop raster isolation
+must be provided before this change can ship in the desktop server.
+
+Existing files remain readable. Legacy image jobs keep their original unless
+compression is needed and saves storage. Videos still retain their original:
+poster extraction does not reconstruct a complete video. Server PR #269 routes
+avatars, group icons, emojis and server icons through the worker. Deploy this
+worker before that server change; older workers cannot apply these profiles.
+
+## Malware detections
+
+Set `CLAMD_SOCKET` to a private ClamAV Unix socket to scan quarantined media
+before decoding. The worker streams bytes using `INSTREAM`; the scanner needs
+no access to the storage volume or database. Run it separately with maintained
+signatures. Set `StreamMaxLength` and scan limits to cover the 64 MiB processing
+ceiling, and enable limit-exceeded alerts so skipped scans cannot report clean.
+
+With a socket configured, scanner errors, disconnects and timeouts reject the
+job. A detection creates one `media.scan_detection` event in the existing
+permission-protected server audit log, recording the uploader, SHA-256 hash,
+scanner and signature. Retrying the same file does not duplicate the event.
+Detections do not ban users. Corrupt files and scanner failures create no
+malware event.
+
+Without `CLAMD_SOCKET`, malware scanning is disabled and the worker logs a
+warning. Its health response distinguishes configured scanning from disabled
+scanning. `scannerReady` checks a bounded ClamAV PING response, cached for five
+seconds. Set `CLAMD_REQUIRED=1` to reject new quarantined media when the socket
+is missing and return HTTP 503 when the scanner is unavailable. PING does not
+verify signature freshness. The draft deployment configuration is in
+[`examples/scanner`](examples/scanner/README.md). Reconstruction and scanning
+reduce risk but cannot guarantee a file is malware-free. Encrypted attachments
+remain opaque and cannot be scanned by the server.
+
+The Docker test runs a real ClamAV daemon with a private test signature for the
+harmless EICAR fixture. This tests the scanning protocol and detection handling;
+it does not test deployment or the freshness of official signatures.
+
 ## Video posters
 
 A video's poster is one frame that ffmpeg grabs and sharp turns into a JPEG.

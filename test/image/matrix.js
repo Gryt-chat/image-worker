@@ -3,6 +3,7 @@
 
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -58,6 +59,70 @@ function runProbe(cmd, argv) {
 async function main() {
   console.log(`tools: ${JSON.stringify(tools)}`);
   fs.writeFileSync("/data/gryt.db", "gryt-ff-canary database\n");
+
+  await check("real ClamAV accepts clean media and detects EICAR", async () => {
+    const { scanMedia, MalwareDetected, probeScanner } = require("/app/dist/malwareScan.js");
+    const dir = fs.mkdtempSync("/data/clam-test-");
+    const socket = path.join(dir, "clamd.sock");
+    const config = path.join(dir, "clamd.conf");
+    const eicar = Buffer.from("X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*");
+    fs.writeFileSync(path.join(dir, "test.hdb"), `${createHash("md5").update(eicar).digest("hex")}:${eicar.length}:Gryt.Eicar-Test\n`);
+    fs.writeFileSync(config, `Foreground yes\nLocalSocket ${socket}\nDatabaseDirectory ${dir}\nTemporaryDirectory ${dir}\nStreamMaxLength 64M\nMaxFileSize 64M\nMaxScanSize 128M\nAlertExceedsMax yes\n`);
+    const child = spawn("/usr/sbin/clamd", ["--config-file", config], { env: {}, stdio: ["ignore", "pipe", "pipe"] });
+    let log = "";
+    child.stdout.on("data", (bytes) => { log += bytes; });
+    child.stderr.on("data", (bytes) => { log += bytes; });
+    try {
+      const deadline = Date.now() + 10000;
+      while (!fs.existsSync(socket) && Date.now() < deadline) {
+        assert.equal(child.exitCode, null, log);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.ok(fs.existsSync(socket), log);
+      assert.equal(await probeScanner(socket), true);
+      const clean = await sharp({ create: { width: 10, height: 10, channels: 3, background: "green" } }).png().toBuffer();
+      await scanMedia(clean, socket);
+      await assert.rejects(scanMedia(eicar, socket), (error) => error instanceof MalwareDetected && /Eicar/.test(error.signature));
+    } finally {
+      const exited = new Promise((resolve) => child.once("exit", resolve));
+      if (child.exitCode === null) { child.kill("SIGTERM"); await exited; }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await check("reconstructs banners in the raster jail", async () => {
+    const decoder = require("/app/dist/imageDecoder.js");
+    const bytes = await sharp({ create: { width: 100, height: 70, channels: 3, background: "red" } }).png().toBuffer();
+    const result = await decoder.reconstructUploadedImage(bytes, 1048576, true);
+    assert.equal((await sharp(result.body).metadata()).width, 960);
+    assert.notDeepEqual(result.body, bytes);
+    await assert.rejects(decoder.reconstructUploadedImage(Buffer.from("invalid"), 1048576, true));
+  });
+  await check("reconstructs avatar and emoji profiles in the raster jail", async () => {
+    const decoder = require("/app/dist/imageDecoder.js");
+    const bytes = await sharp({ create: { width: 80, height: 40, channels: 3, background: "red" } }).png().toBuffer();
+    const transform = { width: 256, height: 256, thumbWidth: 128, thumbHeight: 128, maxFrames: 480, fit: "cover" };
+    const avatar = await decoder.reconstructUploadedImage(bytes, 1048576, false, 320, undefined, transform);
+    assert.equal(avatar.mime, "image/avif");
+    assert.equal(avatar.width, 256);
+    assert.equal(avatar.height, 256);
+    assert.equal((await sharp(avatar.thumb).metadata()).width, 128);
+    const emoji = await decoder.reconstructUploadedImage(bytes, 1048576, false, 320, undefined,
+      { ...transform, width: 128, height: 128, fit: "inside" });
+    assert.equal(emoji.width, 80);
+    assert.equal(emoji.height, 40);
+  });
+  await check("raster jail blocks storage, credentials, network and subprocesses", async () => {
+    const script = `const fs=require("fs");const net=require("net");const cp=require("child_process");
+      let storage=false,network=false,processes=false;
+      try{fs.readFileSync("/data/gryt.db");}catch(e){storage=e.code==="ENOENT";}
+      try{net.createConnection({host:"127.0.0.1",port:80}).on("error",e=>{network=e.code==="EPERM";done();});}catch(e){network=e.code==="EPERM";}
+      const p=cp.spawnSync("/usr/local/bin/node",["-e","0"]);processes=!!p.error;
+      function done(){console.log(JSON.stringify({storage,network,processes,secret:process.env.S3_SECRET_ACCESS_KEY||null}));}`;
+    const result = await vp.runDecoder("/usr/local/bin/ffjail", ["run", process.env.IMAGEJAIL_SOCKET, String(16 * 1024 * 1024 * 1024), "5000", "--", "--jitless", "--disable-wasm-trap-handler", "-e", script], at("h264-aac.mp4"), 6000);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { storage: true, network: true, processes: true, secret: null });
+  });
 
   for (const name of posters) {
     await check(`poster from ${name}`, async () => {

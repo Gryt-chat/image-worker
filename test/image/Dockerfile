@@ -14,6 +14,9 @@ COPY probe.c /probe.c
 RUN gcc -O2 -Wall -static-pie -o /probe /probe.c
 
 FROM ${IMAGE}
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends clamav-daemon \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=fixtures /fixtures /fixtures
 COPY --from=probe /probe /opt/gryt-ff/probe
 COPY entrypoint.sh matrix.js /test/

@@ -79,6 +79,20 @@ COPY --from=deps --chown=gryt:gryt /app/node_modules ./node_modules
 COPY --from=builder --chown=gryt:gryt /app/package.json ./package.json
 COPY --from=builder --chown=gryt:gryt /app/dist ./dist
 
+# The raster decoder gets runtime libraries only, never /data or credentials.
+RUN install -d -m 0755 /opt/gryt-image/jail/usr/local/bin /opt/gryt-image/jail/decoder \
+ && cp /usr/local/bin/node /opt/gryt-image/jail/usr/local/bin/node \
+ && cp dist/imageDecoderEntry.js dist/reconstructImage.js /opt/gryt-image/jail/decoder/ \
+ && mkdir -p /opt/gryt-image/jail/decoder/node_modules/@img \
+ && cp -a node_modules/sharp node_modules/detect-libc node_modules/semver /opt/gryt-image/jail/decoder/node_modules/ \
+ && cp -a node_modules/@img/. /opt/gryt-image/jail/decoder/node_modules/@img/ \
+ && for binary in /usr/local/bin/node /app/node_modules/@img/sharp-linux-*/lib/*.node /app/node_modules/@img/sharp-libvips-linux-*/lib/*.so*; do \
+      ldd "$binary" | awk '$3 ~ /^\// {print $3} $1 ~ /^\// {print $1}' | while read -r library; do \
+        mkdir -p "/opt/gryt-image/jail$(dirname "$library")"; cp -L "$library" "/opt/gryt-image/jail$library"; \
+      done; \
+    done
+ENV IMAGEJAIL_SOCKET=/run/gryt-ff/imagejail.sock
+
 RUN mkdir -p /data && chown -R gryt:gryt /data
 
 # The tag is the source of truth for a release, and package.json is never

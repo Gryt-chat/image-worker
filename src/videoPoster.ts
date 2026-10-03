@@ -4,7 +4,7 @@ import { mkdtemp, open, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { delimiter, join } from "path";
 import type { Readable } from "stream";
-import sharp from "sharp";
+import { reconstructUploadedImage } from "./imageDecoder";
 
 import { getObjectToFile, putObject } from "./storage";
 import { desktopVideoFrame } from "./desktopVideo";
@@ -120,7 +120,7 @@ interface RunResult {
   tooBig: boolean;
 }
 
-async function run(cmd: string, argv: string[], inputPath: string, timeoutMs: number): Promise<RunResult> {
+export async function runDecoder(cmd: string, argv: string[], inputPath: string, timeoutMs: number): Promise<RunResult> {
   const input = await open(inputPath, "r");
   try {
     return await spawnWithInput(cmd, argv, input.fd, timeoutMs);
@@ -184,7 +184,7 @@ export async function grabFrame(
 
     let result: RunResult;
     try {
-      result = await run(command.cmd, command.argv, inputPath, timeoutMs);
+      result = await runDecoder(command.cmd, command.argv, inputPath, timeoutMs);
     } catch (err) {
       return { ok: false, refused: false, reason: `could not start ffmpeg: ${(err as Error).message}` };
     }
@@ -204,10 +204,7 @@ export async function grabFrame(
 
 /** Re-encoded by sharp, so what is stored is a JPEG we made rather than ffmpeg's bytes. */
 export async function posterFromFrame(frame: Buffer): Promise<Buffer> {
-  return sharp(frame, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-    .resize({ width: POSTER_WIDTH, withoutEnlargement: true })
-    .jpeg({ quality: 80 })
-    .toBuffer();
+  return (await reconstructUploadedImage(frame, MAX_FRAME_BYTES, false, POSTER_WIDTH, "poster")).body;
 }
 
 export interface PosterResult {
