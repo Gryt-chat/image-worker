@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import sharp from "sharp";
 
-import { outputKeys, reencode, useOfKey } from "./reencode";
+import { MAX_ANIMATED_FRAMES, outputKeys, reencode, useOfKey } from "./reencode";
 
 const still = (width: number, height: number, format: "png" | "jpeg" = "png") =>
   sharp({ create: { width, height, channels: 3, background: "#3a7bd5" } })[format]().toBuffer();
@@ -64,6 +64,12 @@ describe("reencode", () => {
     assert.equal(meta.pages, 3);
     assert.deepEqual([meta.width, meta.pageHeight], [960, 492]);
     assert.deepEqual([out.width, out.height], [960, 492]);
+  });
+
+  it("keeps only the first frames of a very long animation", async () => {
+    const colours = Array.from({ length: MAX_ANIMATED_FRAMES + 50 }, (_, i) => (i % 2 ? "#f00" : "#00f"));
+    const out = await reencode(await animatedGif(32, 32, colours), "avatar");
+    assert.equal((await sharp(out.body, { animated: true }).metadata()).pages, MAX_ANIMATED_FRAMES);
   });
 
   it("refuses what it cannot decode, so the file stays in quarantine", async () => {

@@ -38,7 +38,7 @@ function listen(): void {
   });
 }
 
-function ask(kind: "image" | "video", use: string, bytes: Buffer): Promise<unknown> {
+function ask(kind: "image" | "video" | "poster", use: string, bytes: Buffer): Promise<unknown> {
   listen();
   const id = nextId++;
   return new Promise((resolve, reject) => {
@@ -93,6 +93,21 @@ export function checkVideoAnswer(answer: unknown, use: "banner" | "avatar"): Des
     throw new Error("Bad result from the media sandbox");
   }
   return { video, poster, width: box.width, height: box.height };
+}
+
+/** A chat video's still: a JPEG no wider than the jail's 320px poster. */
+export function checkPosterAnswer(answer: unknown): Buffer {
+  const a = (answer ?? {}) as Record<string, unknown>;
+  if (a.ok !== true) throw new Error(typeof a.reason === "string" ? a.reason.slice(0, 200) : "The video could not be decoded");
+  const poster = bytesOf(a.poster);
+  if (a.kind !== "poster" || !poster || !isJpeg(poster) || !positive(a.width, 320) || !positive(a.height, 4096)) {
+    throw new Error("Bad result from the media sandbox");
+  }
+  return poster;
+}
+
+export async function posterOnDesktop(bytes: Buffer): Promise<Buffer> {
+  return checkPosterAnswer(await ask("poster", "upload", bytes));
 }
 
 export async function reencodeOnDesktop(bytes: Buffer, use: Use): Promise<JailResult> {

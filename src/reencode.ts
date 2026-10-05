@@ -54,6 +54,9 @@ export interface Reencoded {
   thumbPx: number | null;
 }
 
+/** Twenty seconds at 15 fps, which covers what people use as an animated avatar or emoji. */
+export const MAX_ANIMATED_FRAMES = 300;
+
 /**
  * Decode and write out again. Throws on anything it cannot decode in full, so the
  * job fails and the original stays in quarantine, unserved.
@@ -61,10 +64,10 @@ export interface Reencoded {
 export async function reencode(bytes: Buffer, use: Use): Promise<Reencoded> {
   if (bytes.length === 0 || bytes.length > MAX_QUARANTINE_BYTES) throw new Error("File is empty or too large to process");
   const profile = PROFILES[use];
-  const open = (animated: boolean) =>
-    sharp(bytes, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS, animated });
+  const open = (pages: number) =>
+    sharp(bytes, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS, pages });
 
-  const meta = await open(true).metadata();
+  const meta = await open(-1).metadata();
   // heif covers AVIF; HEIC photos decode only where libvips was built with it.
   if (!meta.format || !ACCEPTED.has(meta.format)) throw new Error(`Unsupported image format: ${meta.format ?? "unknown"}`);
   const animated = (meta.pages ?? 1) > 1 && (meta.format === "gif" || meta.format === "webp");
@@ -75,7 +78,8 @@ export async function reencode(bytes: Buffer, use: Use): Promise<Reencoded> {
     height: side ? Math.min(profile.height, side) : profile.height,
   };
   // Every frame goes through the resize, so a frame that claims another size comes out at this one.
-  const pipeline = open(animated).rotate().resize({
+  // Only the first frames are read: a 1,500-frame GIF came out as a 7 MB avatar.
+  const pipeline = open(animated ? Math.min(meta.pages ?? 1, MAX_ANIMATED_FRAMES) : 1).rotate().resize({
     width: box.width,
     height: box.height,
     fit: profile.fit,
