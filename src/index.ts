@@ -1,5 +1,8 @@
 import consola from "consola";
 import { existsSync } from "fs";
+import { mkdtemp, rm } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
 import http from "http";
 import sharp from "sharp";
 
@@ -17,7 +20,8 @@ import {
 import { findDominantColor, processUploadedImage } from "./processImage";
 import { reencodeInJail } from "./jailedReencode";
 import { MAX_QUARANTINE_BYTES, outputKeys, useOfKey } from "./reencode";
-import { deleteObject, getObjectAsBuffer, initStorage, putObject } from "./storage";
+import { deleteObject, getObjectAsBuffer, getObjectToFile, initStorage, putObject } from "./storage";
+import { transcodeVideo } from "./transcode";
 import { findFrameTools, processUploadedVideo, run } from "./videoPoster";
 
 function clampInt(
@@ -84,7 +88,12 @@ async function runOne(jobId: string): Promise<void> {
     updateImageJobStatus({ job_id: jobId, status: "processing" });
 
     if (job.raw_content_type.toLowerCase().startsWith("video/")) {
-      await runPosterJob(jobId, job.file_id, job.raw_s3_key, bucket);
+      const videoUse = useOfKey(job.raw_s3_key);
+      if (videoUse === "banner" || videoUse === "avatar") {
+        await runVideoJob(jobId, job.file_id, job.raw_s3_key, job.raw_bytes, videoUse, bucket);
+      } else {
+        await runPosterJob(jobId, job.file_id, job.raw_s3_key, bucket);
+      }
       return;
     }
 
@@ -177,6 +186,29 @@ async function runQuarantineJob(
   await deleteObject(bucket, rawKey).catch((e) => consola.warn(`[ImageWorker] Could not delete ${rawKey}`, e));
   processedCount++;
   consola.info(`[ImageWorker] Job ${jobId} done (file=${fileId}, ${use}, ${out.mime} ${out.width}x${out.height})`);
+}
+
+/* Like a quarantined picture: written out again or not at all, and the original goes once the row has moved. */
+async function runVideoJob(jobId: string, fileId: string, rawKey: string, rawBytes: number, use: "banner" | "avatar", bucket: string): Promise<void> {
+  if (rawBytes > MAX_QUARANTINE_BYTES) throw new Error("Video is too large to process");
+  const dir = await mkdtemp(join(tmpdir(), "gryt-video-"));
+  try {
+    const inputPath = join(dir, "input");
+    await getObjectToFile(bucket, rawKey, inputPath);
+    const out = await transcodeVideo(inputPath, use, frameTools);
+    if (!out.ok) throw new Error(out.reason);
+    const key = `${use === "banner" ? "banners" : "avatars"}/${fileId}.mp4`;
+    const thumbKey = `thumbnails/${fileId}.jpg`;
+    await putObject(bucket, key, out.video, "video/mp4");
+    await putObject(bucket, thumbKey, out.poster, "image/jpeg");
+    updateFileRecord(fileId, { s3_key: key, mime: "video/mp4", size: out.video.length, width: out.width, height: out.height, thumbnail_key: thumbKey });
+    updateImageJobStatus({ job_id: jobId, status: "done" });
+    await deleteObject(bucket, rawKey).catch((e) => consola.warn(`[ImageWorker] Could not delete ${rawKey}`, e));
+    processedCount++;
+    consola.info(`[ImageWorker] Job ${jobId} done (file=${fileId}, ${use} video, ${out.video.length} bytes)`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 /* A refused file is an error on the job, not a crash. A worker without ffmpeg
@@ -321,6 +353,8 @@ async function upgradeAvatarThumbnails(): Promise<void> {
 /* Set once the image jail has re-encoded a test picture. A socket that exists says nothing:
    on dev.lan both jails listened and every exec failed (GRYT-1664). */
 let imageJailWorks = false;
+/* The same for ffmpeg's jail, which a video transcode needs. */
+let ffmpegJailWorks = false;
 
 /* Only true where a quarantined upload can actually be written out: a jail that ran, or a
    dev machine. A desktop-embedded worker has no jail, so it doesn't claim it. */
@@ -343,8 +377,9 @@ async function checkJails(): Promise<void> {
   if (frameTools.jail?.client) {
     const { client, socket } = frameTools.jail;
     const r = await run(client, ["run", socket, String(512 * 1024 * 1024), "10000", "--", "-version"], "/dev/null", 15_000).catch(() => null);
-    if (r?.code === 0) consola.info("[ImageWorker] ffmpeg jail: a test run went through");
-    else consola.error(`[ImageWorker] ffmpeg jail failed a test run, so videos get no poster: ${r?.stderr.trim() || "no answer"}`);
+    ffmpegJailWorks = r?.code === 0;
+    if (ffmpegJailWorks) consola.info("[ImageWorker] ffmpeg jail: a test run went through");
+    else consola.error(`[ImageWorker] ffmpeg jail failed a test run, so videos get no poster or transcode: ${r?.stderr.trim() || "no answer"}`);
   }
 }
 
@@ -369,7 +404,7 @@ function startHealthServer(): void {
         errors: errorCount,
         inFlight,
         // The server writes uploads to quarantine only once the worker says it clears them.
-        capabilities: canClearQuarantine() ? ["quarantine-v1"] : [],
+        capabilities: canClearQuarantine() ? ["quarantine-v1", ...(ffmpegJailWorks ? ["video-v1"] : [])] : [],
       }),
     );
   });

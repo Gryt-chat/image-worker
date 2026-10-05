@@ -80,6 +80,35 @@ async function main() {
     });
   }
 
+  // GRYT-1664: a banner or avatar video is written out again, one size, no sound, ten seconds at most.
+  const tc = require("/app/dist/transcode.js");
+  for (const [name, use, width, height] of [
+    ["resizing.webm", "banner", 960, 492], ["long-1080p60.mp4", "avatar", 256, 256], ["vp9-opus.webm", "banner", 960, 492],
+  ]) {
+    await check(`transcodes ${name} to a ${use}`, async () => {
+      const out = await tc.transcodeVideo(at(name), use, tools);
+      assert.equal(out.ok, true, out.reason);
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tc-"));
+      const file = path.join(dir, "out.mp4");
+      fs.writeFileSync(file, out.video);
+      const frames = await vp.grabFrame(file, tools);
+      assert.equal(frames.ok, true, frames.reason);
+      const meta = await sharp(frames.frame).metadata();
+      assert.deepEqual([meta.width, meta.height], [width, height]);
+      const text = out.video.toString("latin1");
+      assert.ok(text.includes("av01"), "not AV1");
+      assert.ok(!text.includes("mp4a") && !text.includes("Opus"), "a sound track survived");
+      fs.rmSync(dir, { recursive: true, force: true });
+      return `${out.video.length} bytes`;
+    });
+  }
+  for (const name of ["random.mp4", "text.mp4", "png.mp4"]) {
+    await check(`refuses to transcode ${name}`, async () => {
+      const out = await tc.transcodeVideo(at(name), "banner", tools);
+      assert.equal(out.ok, false);
+    });
+  }
+
   await check("kills ffmpeg at the time cap", async () => {
     const grabbed = await vp.grabFrame(at("4k-hevc.mp4"), tools, { timeoutMs: 1 });
     assert.deepEqual(grabbed, { ok: false, refused: true, reason: "ffmpeg ran past 1ms" });

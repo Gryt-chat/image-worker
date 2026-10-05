@@ -24,6 +24,15 @@ ff -f lavfi -i testsrc2=size=640x360:rate=30:duration=3 -c:v libx264 -pix_fmt yu
 head -c 60000 faststart.mp4 > head60k.mp4
 rm faststart.mp4
 
+# A WebM whose frames change size mid-stream, the kind that grows and shrinks in a chat (GRYT-1664).
+ff -f lavfi -i testsrc=size=320x240:rate=24:duration=2 -c:v libvpx-vp9 -b:v 300k part-a.webm
+ff -f lavfi -i testsrc2=size=1280x200:rate=24:duration=2 -c:v libvpx-vp9 -b:v 300k part-b.webm
+printf "file 'part-a.webm'\nfile 'part-b.webm'\nfile 'part-a.webm'\n" > parts.txt
+ff -f concat -safe 0 -i parts.txt -c copy resizing.webm
+rm part-a.webm part-b.webm parts.txt
+ff -f lavfi -i testsrc2=size=1920x1080:rate=60:duration=15 -f lavfi -i sine=duration=15 \
+  -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -shortest long-1080p60.mp4
+
 head -c 40000 h264-aac.mp4 > cut40k.mp4
 head -c 200000 /dev/urandom > random.mp4
 echo "this is not a video" > text.mp4
