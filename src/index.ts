@@ -1,4 +1,5 @@
 import consola from "consola";
+import { existsSync } from "fs";
 import http from "http";
 import sharp from "sharp";
 
@@ -14,9 +15,10 @@ import {
   updateImageJobStatus,
 } from "./db";
 import { findDominantColor, processUploadedImage } from "./processImage";
-import { MAX_QUARANTINE_BYTES, outputKeys, reencode, useOfKey } from "./reencode";
+import { reencodeInJail } from "./jailedReencode";
+import { MAX_QUARANTINE_BYTES, outputKeys, useOfKey } from "./reencode";
 import { deleteObject, getObjectAsBuffer, initStorage, putObject } from "./storage";
-import { findFrameTools, processUploadedVideo } from "./videoPoster";
+import { findExecutable, findFrameTools, processUploadedVideo } from "./videoPoster";
 
 function clampInt(
   value: string | undefined,
@@ -156,7 +158,7 @@ async function runQuarantineJob(
   bucket: string,
 ): Promise<void> {
   if (rawBytes > MAX_QUARANTINE_BYTES) throw new Error("File is too large to process");
-  const out = await reencode(await getObjectAsBuffer(bucket, rawKey), use);
+  const out = await reencodeInJail(await getObjectAsBuffer(bucket, rawKey), use);
   const { key, thumbKey } = outputKeys(use, fileId, out.ext);
   await putObject(bucket, key, out.body, out.mime);
   if (out.thumb) await putObject(bucket, thumbKey, out.thumb, "image/avif");
@@ -169,7 +171,7 @@ async function runQuarantineJob(
     height: out.height,
     thumbnail_key: out.thumb ? thumbKey : null,
     thumbnail_px: out.thumb ? out.thumbPx : null,
-    dominant_color: await findDominantColor(out.body, out.animated),
+    dominant_color: out.dominantColor,
   });
   updateImageJobStatus({ job_id: jobId, status: "done" });
   await deleteObject(bucket, rawKey).catch((e) => consola.warn(`[ImageWorker] Could not delete ${rawKey}`, e));
@@ -316,6 +318,14 @@ async function upgradeAvatarThumbnails(): Promise<void> {
   }
 }
 
+/* Only true where a quarantined upload can actually be written out: inside the jail, or on
+   a dev machine. A desktop-embedded worker has no jail, so it doesn't claim it. */
+function canClearQuarantine(): boolean {
+  if (process.env.NODE_ENV !== "production") return true;
+  const socket = process.env.IMAGEJAIL_SOCKET;
+  return Boolean(socket && existsSync(socket) && findExecutable("ffjail"));
+}
+
 function startHealthServer(): void {
   const server = http.createServer((req, res) => {
     const path = (req.url || "/").split("?")[0];
@@ -337,7 +347,7 @@ function startHealthServer(): void {
         errors: errorCount,
         inFlight,
         // The server writes uploads to quarantine only once the worker says it clears them.
-        capabilities: ["quarantine-v1"],
+        capabilities: canClearQuarantine() ? ["quarantine-v1"] : [],
       }),
     );
   });
