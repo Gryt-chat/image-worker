@@ -4,6 +4,7 @@ import type { Reencoded } from "./reencode";
 
 export interface JailResult extends Reencoded {
   dominantColor: string | null;
+  thumbMime: "image/avif" | "image/webp";
 }
 
 const MIMES = new Set(["image/avif", "image/webp"]);
@@ -48,5 +49,6 @@ export function unpackResult(bytes: Buffer): JailResult {
     animated: h.animated,
     thumbPx: h.thumbPx as number | null,
     dominantColor: h.dominantColor as string | null,
+    thumbMime: "image/avif",
   };
 }
