@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { findDominantColor } from "./colour";
+import { hasDesktopSandbox, reencodeOnDesktop } from "./desktopSandbox";
 import { reencode, type Use } from "./reencode";
 import { type JailResult, unpackResult } from "./reencodeResult";
 import { findExecutable, JAIL_FAILED, run } from "./videoPoster";
@@ -22,9 +23,10 @@ export async function reencodeInJail(
   production = process.env.NODE_ENV === "production",
 ): Promise<JailResult> {
   if (!socket) {
+    if (hasDesktopSandbox()) return reencodeOnDesktop(bytes, use);
     if (production) throw new Error("No image jail, so the upload stays in quarantine");
     const out = await reencode(bytes, use);
-    return { ...out, dominantColor: await findDominantColor(out.body, out.animated) };
+    return { ...out, dominantColor: await findDominantColor(out.body, out.animated), thumbMime: "image/avif" };
   }
   const client = findExecutable("ffjail");
   if (!client || !existsSync(socket)) throw new Error("The image jail isn't running, so the upload stays in quarantine");

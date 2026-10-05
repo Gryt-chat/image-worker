@@ -1,6 +1,6 @@
 import consola from "consola";
 import { existsSync } from "fs";
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, readFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import http from "http";
@@ -18,6 +18,7 @@ import {
   updateImageJobStatus,
 } from "./db";
 import { findDominantColor, processUploadedImage } from "./processImage";
+import { hasDesktopSandbox, transcodeOnDesktop } from "./desktopSandbox";
 import { reencodeInJail } from "./jailedReencode";
 import { MAX_QUARANTINE_BYTES, outputKeys, useOfKey } from "./reencode";
 import { deleteObject, getObjectAsBuffer, getObjectToFile, initStorage, putObject } from "./storage";
@@ -168,9 +169,9 @@ async function runQuarantineJob(
 ): Promise<void> {
   if (rawBytes > MAX_QUARANTINE_BYTES) throw new Error("File is too large to process");
   const out = await reencodeInJail(await getObjectAsBuffer(bucket, rawKey), use);
-  const { key, thumbKey } = outputKeys(use, fileId, out.ext);
+  const { key, thumbKey } = outputKeys(use, fileId, out.ext, out.thumbMime === "image/webp" ? "webp" : "avif");
   await putObject(bucket, key, out.body, out.mime);
-  if (out.thumb) await putObject(bucket, thumbKey, out.thumb, "image/avif");
+  if (out.thumb) await putObject(bucket, thumbKey, out.thumb, out.thumbMime);
 
   updateFileRecord(fileId, {
     s3_key: key,
@@ -195,7 +196,10 @@ async function runVideoJob(jobId: string, fileId: string, rawKey: string, rawByt
   try {
     const inputPath = join(dir, "input");
     await getObjectToFile(bucket, rawKey, inputPath);
-    const out = await transcodeVideo(inputPath, use, frameTools);
+    // No jail on a desktop-hosted server, so the app's sandboxed renderer transcodes instead.
+    const out = !ffmpegJailWorks && hasDesktopSandbox()
+      ? { ok: true as const, ...(await transcodeOnDesktop(await readFile(inputPath), use)) }
+      : await transcodeVideo(inputPath, use, frameTools);
     if (!out.ok) throw new Error(out.reason);
     const key = `${use === "banner" ? "banners" : "avatars"}/${fileId}.mp4`;
     const thumbKey = `thumbnails/${fileId}.jpg`;
@@ -357,9 +361,9 @@ let imageJailWorks = false;
 let ffmpegJailWorks = false;
 
 /* Only true where a quarantined upload can actually be written out: a jail that ran, or a
-   dev machine. A desktop-embedded worker has no jail, so it doesn't claim it. */
+   dev machine, or the desktop app's sandboxed renderer when the app forked this worker. */
 function canClearQuarantine(): boolean {
-  if (process.env.NODE_ENV !== "production") return true;
+  if (process.env.NODE_ENV !== "production" || hasDesktopSandbox()) return true;
   return imageJailWorks;
 }
 
@@ -404,7 +408,7 @@ function startHealthServer(): void {
         errors: errorCount,
         inFlight,
         // The server writes uploads to quarantine only once the worker says it clears them.
-        capabilities: canClearQuarantine() ? ["quarantine-v1", ...(ffmpegJailWorks ? ["video-v1"] : [])] : [],
+        capabilities: canClearQuarantine() ? ["quarantine-v1", ...(ffmpegJailWorks || hasDesktopSandbox() ? ["video-v1"] : [])] : [],
       }),
     );
   });

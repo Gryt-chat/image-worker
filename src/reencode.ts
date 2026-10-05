@@ -108,6 +108,6 @@ export async function reencode(bytes: Buffer, use: Use): Promise<Reencoded> {
 }
 
 /** Where the written-out file and its thumbnail go. */
-export function outputKeys(use: Use, fileId: string, ext: string): { key: string; thumbKey: string } {
-  return { key: `${PROFILES[use].prefix}/${fileId}.${ext}`, thumbKey: `thumbnails/${fileId}.avif` };
+export function outputKeys(use: Use, fileId: string, ext: string, thumbExt = "avif"): { key: string; thumbKey: string } {
+  return { key: `${PROFILES[use].prefix}/${fileId}.${ext}`, thumbKey: `thumbnails/${fileId}.${thumbExt}` };
 }
