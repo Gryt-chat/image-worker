@@ -29,6 +29,8 @@ export interface FrameTools {
   prlimit: string | null;
   /** Set in the Docker image, where ffmpeg only runs inside jail/ffjail.c. */
   jail?: { client: string | null; socket: string };
+  /** Production with no jail: whatever ffmpeg is on the host is not run on a stranger's file. */
+  hostRefused?: boolean;
 }
 
 export type FrameResult =
@@ -49,7 +51,11 @@ export function findExecutable(name: string, pathEnv = process.env.PATH ?? ""): 
   return null;
 }
 
-export function findFrameTools(pathEnv?: string, jailSocket = process.env.FFJAIL_SOCKET): FrameTools {
+export function findFrameTools(pathEnv?: string, jailSocket = process.env.FFJAIL_SOCKET, env: NodeJS.ProcessEnv = process.env): FrameTools {
+  // Only Docker has the jail. Elsewhere in production a host ffmpeg runs only when the host asks (GRYT-1668).
+  if (!jailSocket && env.NODE_ENV === "production" && env.GRYT_ALLOW_HOST_FFMPEG !== "1") {
+    return { ffmpeg: null, prlimit: null, hostRefused: true };
+  }
   const tools = { ffmpeg: findExecutable("ffmpeg", pathEnv), prlimit: findExecutable("prlimit", pathEnv) };
   if (!jailSocket) return tools;
   return { ...tools, jail: { client: findExecutable("ffjail", pathEnv), socket: jailSocket } };
@@ -90,6 +96,7 @@ export function frameCommand(
     if (!existsSync(socket)) return { missing: "the ffmpeg jail isn't running" };
     return { cmd: client, argv: ["run", socket, String(memoryBytes), String(timeoutMs), "--", ...args] };
   }
+  if (tools.hostRefused) return { missing: "no ffmpeg jail, and GRYT_ALLOW_HOST_FFMPEG=1 isn't set" };
   if (!tools.ffmpeg) return { missing: "ffmpeg is not installed" };
   if (tools.prlimit) {
     return { cmd: tools.prlimit, argv: [`--as=${memoryBytes}`, "--", tools.ffmpeg, ...args] };

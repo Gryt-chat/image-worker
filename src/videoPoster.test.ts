@@ -106,6 +106,15 @@ describe("the ffmpeg command", () => {
     assert.deepEqual(findFrameTools("", "/run/x.sock").jail, { client: null, socket: "/run/x.sock" });
   });
 
+  it("never runs a host ffmpeg in production without a jail, unless the host asks", () => {
+    const path = process.env.PATH;
+    const refused = findFrameTools(path, undefined, { NODE_ENV: "production" });
+    assert.deepEqual(refused, { ffmpeg: null, prlimit: null, hostRefused: true });
+    assert.deepEqual(frameCommand(refused, ["-x"]), { missing: "no ffmpeg jail, and GRYT_ALLOW_HOST_FFMPEG=1 isn't set" });
+    assert.equal(findFrameTools(path, undefined, { NODE_ENV: "production", GRYT_ALLOW_HOST_FFMPEG: "1" }).hostRefused, undefined);
+    assert.equal(findFrameTools(path, "/run/x.sock", { NODE_ENV: "production" }).hostRefused, undefined, "the jail is still used");
+  });
+
   it("runs ffmpeg directly on a dev machine without prlimit", () => {
     const cmd = frameCommand({ ffmpeg: "/opt/homebrew/bin/ffmpeg", prlimit: null }, ["-x"], "darwin");
     assert.deepEqual(cmd, { cmd: "/opt/homebrew/bin/ffmpeg", argv: ["-x"] });

@@ -54,6 +54,11 @@ poster. A system ffmpeg has to be 6.0 or newer, for the `fd` protocol. On Linux
 the worker also needs `prlimit` from util-linux, and it skips posters rather
 than run ffmpeg without the cap.
 
+Running your own build in production (`NODE_ENV=production`) without the jail,
+the worker doesn't touch the system ffmpeg at all, so videos get no poster. A
+decoder bug in a stranger's file would run as you, with your files in reach.
+If you accept that, set `GRYT_ALLOW_HOST_FFMPEG=1`.
+
 ## Configuration
 
 | Variable | Default | Description |
