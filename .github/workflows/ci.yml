@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          # 22, matching the Dockerfile's builder and what Release Image Worker sets up.
+          # 22, matching the Dockerfile's builder and what Release Media Worker sets up.
           # Testing on anything newer would test something this service does not run on.
           node-version: "22"
           cache: yarn
