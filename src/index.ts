@@ -14,7 +14,8 @@ import {
   updateImageJobStatus,
 } from "./db";
 import { findDominantColor, processUploadedImage } from "./processImage";
-import { getObjectAsBuffer, initStorage, putObject } from "./storage";
+import { MAX_QUARANTINE_BYTES, outputKeys, reencode, useOfKey } from "./reencode";
+import { deleteObject, getObjectAsBuffer, initStorage, putObject } from "./storage";
 import { findFrameTools, processUploadedVideo } from "./videoPoster";
 
 function clampInt(
@@ -85,6 +86,12 @@ async function runOne(jobId: string): Promise<void> {
       return;
     }
 
+    const use = useOfKey(job.raw_s3_key);
+    if (use) {
+      await runQuarantineJob(jobId, job.file_id, job.raw_s3_key, job.raw_bytes, use, bucket);
+      return;
+    }
+
     const maxBytes = getUploadMaxBytes();
 
     const result = await processUploadedImage(
@@ -136,6 +143,38 @@ async function runOne(jobId: string): Promise<void> {
   } finally {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
+}
+
+/* Written out again or not at all: a file that fails stays in quarantine, and the server
+   never serves a quarantine key. The original is deleted only once the row points elsewhere. */
+async function runQuarantineJob(
+  jobId: string,
+  fileId: string,
+  rawKey: string,
+  rawBytes: number,
+  use: NonNullable<ReturnType<typeof useOfKey>>,
+  bucket: string,
+): Promise<void> {
+  if (rawBytes > MAX_QUARANTINE_BYTES) throw new Error("File is too large to process");
+  const out = await reencode(await getObjectAsBuffer(bucket, rawKey), use);
+  const { key, thumbKey } = outputKeys(use, fileId, out.ext);
+  await putObject(bucket, key, out.body, out.mime);
+  if (out.thumb) await putObject(bucket, thumbKey, out.thumb, "image/avif");
+
+  updateFileRecord(fileId, {
+    s3_key: key,
+    mime: out.mime,
+    size: out.body.length,
+    width: out.width,
+    height: out.height,
+    thumbnail_key: out.thumb ? thumbKey : null,
+    thumbnail_px: out.thumb ? out.thumbPx : null,
+    dominant_color: await findDominantColor(out.body, out.animated),
+  });
+  updateImageJobStatus({ job_id: jobId, status: "done" });
+  await deleteObject(bucket, rawKey).catch((e) => consola.warn(`[ImageWorker] Could not delete ${rawKey}`, e));
+  processedCount++;
+  consola.info(`[ImageWorker] Job ${jobId} done (file=${fileId}, ${use}, ${out.mime} ${out.width}x${out.height})`);
 }
 
 /* A refused file is an error on the job, not a crash. A worker without ffmpeg
@@ -297,6 +336,8 @@ function startHealthServer(): void {
         rethumbed: rethumbedCount,
         errors: errorCount,
         inFlight,
+        // The server writes uploads to quarantine only once the worker says it clears them.
+        capabilities: ["quarantine-v1"],
       }),
     );
   });

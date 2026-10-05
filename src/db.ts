@@ -125,6 +125,8 @@ export function updateFileRecord(
     thumbnail_key?: string | null;
     thumbnail_px?: number | null;
     dominant_color?: string | null;
+    width?: number | null;
+    height?: number | null;
   },
 ): void {
   const d = getDb();
@@ -153,6 +155,14 @@ export function updateFileRecord(
   if (updates.dominant_color !== undefined) {
     sets.push("dominant_color = ?");
     vals.push(updates.dominant_color);
+  }
+  if (updates.width !== undefined) {
+    sets.push("width = ?");
+    vals.push(updates.width);
+  }
+  if (updates.height !== undefined) {
+    sets.push("height = ?");
+    vals.push(updates.height);
   }
   if (sets.length === 0) return;
   vals.push(fileId);
