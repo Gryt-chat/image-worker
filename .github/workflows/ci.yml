@@ -45,7 +45,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t gryt-ff-worker .
-      - run: docker build --build-arg IMAGE=gryt-ff-worker -t gryt-ff-worker-test test/image
+      - uses: docker/setup-buildx-action@v3
+      # One cache per architecture. A pull request only rebuilds what its diff touches,
+      # so the compiled ffmpeg, dav1d and SVT-AV1 stages come back from the cache.
+      - uses: docker/bake-action@v6
+        with:
+          source: .
+          files: docker-bake.hcl
+          targets: test
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=image-${{ matrix.runner }}
+            *.cache-to=type=gha,scope=image-${{ matrix.runner }},mode=max
       - run: docker run --rm gryt-ff-worker-test
-      - run: docker image ls gryt-ff-worker
