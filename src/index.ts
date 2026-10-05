@@ -18,7 +18,7 @@ import {
   updateImageJobStatus,
 } from "./db";
 import { findDominantColor, processUploadedImage } from "./processImage";
-import { hasDesktopSandbox, transcodeOnDesktop } from "./desktopSandbox";
+import { hasDesktopSandbox, posterOnDesktop, transcodeOnDesktop } from "./desktopSandbox";
 import { reencodeInJail } from "./jailedReencode";
 import { MAX_QUARANTINE_BYTES, outputKeys, useOfKey } from "./reencode";
 import { deleteObject, getObjectAsBuffer, getObjectToFile, initStorage, putObject } from "./storage";
@@ -93,7 +93,7 @@ async function runOne(jobId: string): Promise<void> {
       if (videoUse === "banner" || videoUse === "avatar") {
         await runVideoJob(jobId, job.file_id, job.raw_s3_key, job.raw_bytes, videoUse, bucket);
       } else {
-        await runPosterJob(jobId, job.file_id, job.raw_s3_key, bucket);
+        await runPosterJob(jobId, job.file_id, job.raw_s3_key, job.raw_bytes, bucket);
       }
       return;
     }
@@ -215,10 +215,27 @@ async function runVideoJob(jobId: string, fileId: string, rawKey: string, rawByt
   }
 }
 
+/* A desktop server never runs an ffmpeg it found on the host: the poster comes from the
+   app's sandboxed renderer, like everything else there (GRYT-1664). */
+async function desktopPoster(bucket: string, fileId: string, rawKey: string, rawBytes: number): Promise<{ thumbKey: string | null; refused: boolean; reason: string | null }> {
+  // Too big to hand over in one message: no poster, which is what the video had before.
+  if (rawBytes > MAX_QUARANTINE_BYTES) return { thumbKey: null, refused: false, reason: "too large for the media sandbox" };
+  try {
+    const poster = await posterOnDesktop(await getObjectAsBuffer(bucket, rawKey));
+    const thumbKey = `thumbnails/${fileId}.jpg`;
+    await putObject(bucket, thumbKey, poster, "image/jpeg");
+    return { thumbKey, refused: false, reason: null };
+  } catch (e) {
+    return { thumbKey: null, refused: true, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /* A refused file is an error on the job, not a crash. A worker without ffmpeg
    finishes the job with no poster, which is what a video had before. */
-async function runPosterJob(jobId: string, fileId: string, rawKey: string, bucket: string): Promise<void> {
-  const poster = await processUploadedVideo(bucket, fileId, rawKey, frameTools);
+async function runPosterJob(jobId: string, fileId: string, rawKey: string, rawBytes: number, bucket: string): Promise<void> {
+  const poster = !ffmpegJailWorks && hasDesktopSandbox()
+    ? await desktopPoster(bucket, fileId, rawKey, rawBytes)
+    : await processUploadedVideo(bucket, fileId, rawKey, frameTools);
   if (poster.thumbKey) updateFileRecord(fileId, { thumbnail_key: poster.thumbKey });
 
   if (poster.refused) {

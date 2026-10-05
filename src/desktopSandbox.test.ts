@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { checkImageAnswer, checkVideoAnswer, hasDesktopSandbox } from "./desktopSandbox";
+import { checkImageAnswer, checkPosterAnswer, checkVideoAnswer, hasDesktopSandbox } from "./desktopSandbox";
 
 const webp = () => new Uint8Array(Buffer.concat([Buffer.from("RIFF\x10\x00\x00\x00WEBPVP8 ", "latin1"), Buffer.alloc(8)]));
 const jpeg = () => new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2]);
@@ -61,5 +61,19 @@ describe("checkVideoAnswer", () => {
     assert.throws(() => checkVideoAnswer(video, "avatar"), /Bad result/);
     assert.throws(() => checkVideoAnswer({ ...video, video: webp() }, "banner"), /Bad result/);
     assert.throws(() => checkVideoAnswer({ ...video, poster: webp() }, "banner"), /Bad result/);
+  });
+});
+
+describe("checkPosterAnswer", () => {
+  const poster = { ok: true, kind: "poster", poster: jpeg(), width: 320, height: 180 };
+
+  it("takes a JPEG no wider than 320px", () => {
+    assert.ok(Buffer.isBuffer(checkPosterAnswer(poster)));
+  });
+
+  it("refuses a wider poster, another format, or another kind of answer", () => {
+    assert.throws(() => checkPosterAnswer({ ...poster, width: 1920 }), /Bad result/);
+    assert.throws(() => checkPosterAnswer({ ...poster, poster: webp() }), /Bad result/);
+    assert.throws(() => checkPosterAnswer({ ...poster, kind: "video" }), /Bad result/);
   });
 });
