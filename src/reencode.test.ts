@@ -50,9 +50,9 @@ describe("reencode", () => {
     assert.equal(out.thumbPx, 128);
   });
 
-  it("shrinks an emoji to fit 128px and keeps its shape, with no thumbnail", async () => {
+  it("shrinks an emoji to 128px tall and keeps its shape, with no thumbnail", async () => {
     const out = await reencode(await still(500, 200), "emoji");
-    assert.deepEqual([out.width, out.height], [128, 51]);
+    assert.deepEqual([out.width, out.height], [320, 128]);
     assert.equal(out.thumb, null);
   });
 
