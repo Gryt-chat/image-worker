@@ -79,6 +79,19 @@ COPY --from=deps --chown=gryt:gryt /app/node_modules ./node_modules
 COPY --from=builder --chown=gryt:gryt /app/package.json ./package.json
 COPY --from=builder --chown=gryt:gryt /app/dist ./dist
 
+# The image jail: node, sharp and the re-encode code, and nothing else. No /data, no
+# credentials, no network; ffjail runs it as gryt-ff in this tree (GRYT-1664).
+RUN install -d -m 0755 /opt/gryt-image/jail/usr/local/bin /opt/gryt-image/jail/decoder/dist /opt/gryt-image/jail/decoder/node_modules \
+ && cp /usr/local/bin/node /opt/gryt-image/jail/usr/local/bin/node \
+ && cp dist/reencodeEntry.js dist/reencode.js dist/reencodeResult.js dist/colour.js /opt/gryt-image/jail/decoder/dist/ \
+ && cp -a node_modules/sharp node_modules/detect-libc node_modules/semver node_modules/@img /opt/gryt-image/jail/decoder/node_modules/ \
+ && for binary in /usr/local/bin/node /app/node_modules/@img/sharp-linux-*/lib/*.node /app/node_modules/@img/sharp-libvips-linux-*/lib/*.so*; do \
+      ldd "$binary" | awk '$3 ~ /^\// {print $3} $1 ~ /^\// {print $1}' | while read -r library; do \
+        mkdir -p "/opt/gryt-image/jail$(dirname "$library")"; cp -L "$library" "/opt/gryt-image/jail$library"; \
+      done; \
+    done
+ENV IMAGEJAIL_SOCKET=/run/gryt-ff/imagejail.sock
+
 RUN mkdir -p /data && chown -R gryt:gryt /data
 
 # The tag is the source of truth for a release, and package.json is never

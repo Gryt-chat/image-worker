@@ -109,7 +109,7 @@ function describeFailure(stderr: string): string {
   return [...new Set(lines)].slice(0, 2).join(" / ").slice(0, 300) || "ffmpeg failed without saying why";
 }
 
-interface RunResult {
+export interface RunResult {
   code: number | null;
   stdout: Buffer;
   stderr: string;
@@ -117,7 +117,7 @@ interface RunResult {
   tooBig: boolean;
 }
 
-async function run(cmd: string, argv: string[], inputPath: string, timeoutMs: number): Promise<RunResult> {
+export async function run(cmd: string, argv: string[], inputPath: string, timeoutMs: number): Promise<RunResult> {
   const input = await open(inputPath, "r");
   try {
     return await spawnWithInput(cmd, argv, input.fd, timeoutMs);
