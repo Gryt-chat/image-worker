@@ -18,7 +18,7 @@ import { findDominantColor, processUploadedImage } from "./processImage";
 import { reencodeInJail } from "./jailedReencode";
 import { MAX_QUARANTINE_BYTES, outputKeys, useOfKey } from "./reencode";
 import { deleteObject, getObjectAsBuffer, initStorage, putObject } from "./storage";
-import { findExecutable, findFrameTools, processUploadedVideo } from "./videoPoster";
+import { findFrameTools, processUploadedVideo, run } from "./videoPoster";
 
 function clampInt(
   value: string | undefined,
@@ -318,12 +318,34 @@ async function upgradeAvatarThumbnails(): Promise<void> {
   }
 }
 
-/* Only true where a quarantined upload can actually be written out: inside the jail, or on
-   a dev machine. A desktop-embedded worker has no jail, so it doesn't claim it. */
+/* Set once the image jail has re-encoded a test picture. A socket that exists says nothing:
+   on dev.lan both jails listened and every exec failed (GRYT-1664). */
+let imageJailWorks = false;
+
+/* Only true where a quarantined upload can actually be written out: a jail that ran, or a
+   dev machine. A desktop-embedded worker has no jail, so it doesn't claim it. */
 function canClearQuarantine(): boolean {
   if (process.env.NODE_ENV !== "production") return true;
-  const socket = process.env.IMAGEJAIL_SOCKET;
-  return Boolean(socket && existsSync(socket) && findExecutable("ffjail"));
+  return imageJailWorks;
+}
+
+async function checkJails(): Promise<void> {
+  if (process.env.IMAGEJAIL_SOCKET && existsSync(process.env.IMAGEJAIL_SOCKET)) {
+    try {
+      const sample = await sharp({ create: { width: 8, height: 8, channels: 3, background: "#888" } }).png().toBuffer();
+      await reencodeInJail(sample, "emoji");
+      imageJailWorks = true;
+      consola.info("[ImageWorker] Image jail: a test picture went through, so uploads can be quarantined");
+    } catch (e) {
+      consola.error(`[ImageWorker] Image jail failed a test picture, so uploads won't be quarantined: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  if (frameTools.jail?.client) {
+    const { client, socket } = frameTools.jail;
+    const r = await run(client, ["run", socket, String(512 * 1024 * 1024), "10000", "--", "-version"], "/dev/null", 15_000).catch(() => null);
+    if (r?.code === 0) consola.info("[ImageWorker] ffmpeg jail: a test run went through");
+    else consola.error(`[ImageWorker] ffmpeg jail failed a test run, so videos get no poster: ${r?.stderr.trim() || "no answer"}`);
+  }
 }
 
 function startHealthServer(): void {
@@ -370,6 +392,7 @@ async function main(): Promise<void> {
   await initStorage();
   initDb();
 
+  await checkJails();
   startHealthServer();
 
   setInterval(() => {

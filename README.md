@@ -39,7 +39,7 @@ new ffmpeg release means bumping them by hand.
 In the image, ffmpeg doesn't run as the worker. The container starts as root
 just long enough for `jail/entrypoint.sh` to start `ffjail`, and then the
 worker runs as `gryt`. ffjail runs each decode as a second user, `gryt-ff`,
-inside an empty chroot. There's no `/proc`, `/data` or `/app` in there to read.
+inside a chroot that holds the ffmpeg binary and nothing else. There's no `/proc`, `/data` or `/app` in there to read.
 ffmpeg gets an empty environment, no capabilities, the 1 GiB cap, and a
 seccomp filter that refuses sockets, ptrace and new processes. All it has is
 the input as fd 3 and a pipe for the PNG. `test/image` checks that on every
