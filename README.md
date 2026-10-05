@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/Gryt-chat/client/main/public/logo.svg" width="80" alt="Gryt logo" />
-  <h1>Gryt Image Worker</h1>
-  <p>Background image processing worker for the <a href="https://github.com/Gryt-chat/gryt">Gryt</a> voice &amp; video platform.<br />Compresses uploads to AVIF, generates thumbnails and updates the shared SQLite database, using <a href="https://sharp.pixelplumbing.com/">Sharp</a>.</p>
+  <h1>Gryt Media Worker</h1>
+  <p>Checks and rewrites uploads for the <a href="https://github.com/Gryt-chat/gryt">Gryt</a> voice &amp; video platform.<br />Pictures, video and emoji are decoded in a jail, written out again, and only then shown to anyone. Images go through <a href="https://sharp.pixelplumbing.com/">Sharp</a>, video through ffmpeg.</p>
 </div>
 
 <br />
@@ -14,6 +14,8 @@ docker run -v gryt-data:/data --env-file .env ghcr.io/gryt-chat/image-worker:lat
 ```
 
 Browse tags at [ghcr.io/gryt-chat/image-worker](https://github.com/Gryt-chat/image-worker/pkgs/container/image-worker).
+
+It started out handling only pictures and was called the image worker. The docs and the app call it the media worker now, but the repository, the container image and `IMAGE_WORKER_URL` kept the old name. Renaming those would break every compose file and server that's already deployed, for nothing anyone would notice.
 
 ## It parses files strangers uploaded
 

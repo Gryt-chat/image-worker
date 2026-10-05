@@ -1,4 +1,4 @@
-name: Release Image Worker
+name: Release Media Worker
 
 # The one component with no way to ship: Release Server moves this gitlink and never builds
 # the image. Modelled on the SFU's release, so the channel decides the floating tag.
@@ -41,7 +41,7 @@ env:
 
 jobs:
   release:
-    name: Release Image Worker
+    name: Release Media Worker
     runs-on: ubuntu-latest
 
     steps:
@@ -332,7 +332,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.release.outputs.version }}
-          name: Gryt Image Worker v${{ needs.release.outputs.version }}
+          name: Gryt Media Worker v${{ needs.release.outputs.version }}
           prerelease: ${{ needs.release.outputs.channel == 'beta' }}
           generate_release_notes: true
         env:
@@ -342,7 +342,7 @@ jobs:
       - name: Announce the release on Discord and Gryt
         uses: Gryt-chat/.github/actions/release-notify@main
         with:
-          component: Image Worker
+          component: Media Worker
           version: ${{ needs.release.outputs.version }}
           channel: ${{ needs.release.outputs.channel }}
           repository: Gryt-chat/image-worker

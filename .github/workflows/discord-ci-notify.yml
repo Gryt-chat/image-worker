@@ -8,7 +8,7 @@ on:
     workflows:
       - CI
       - Gryt Git notification
-      - Release Image Worker
+      - Release Media Worker
       - Sync Vikunja task
     types: [completed]
 
