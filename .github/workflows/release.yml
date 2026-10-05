@@ -199,6 +199,30 @@ jobs:
           git tag "v${{ steps.version.outputs.version }}"
           git push origin "v${{ steps.version.outputs.version }}"
 
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.channel.outputs.channel }}
+
+  # One native build per architecture. Under QEMU the arm64 compile of ffmpeg, dav1d and
+  # SVT-AV1 took most of an hour; on its own runner it takes the same few minutes as amd64.
+  image:
+    name: Build ${{ matrix.arch }}
+    needs: release
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -209,14 +233,65 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      # Pushed by digest only; the publish job puts the tags on both at once.
+      - name: Build and push by digest
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/${{ matrix.arch }} \
+            --build-arg IMAGE_WORKER_VERSION="${{ needs.release.outputs.version }}" \
+            --cache-from "type=registry,ref=${IMAGE}:buildcache-${{ matrix.arch }}" \
+            --cache-to "type=registry,ref=${IMAGE}:buildcache-${{ matrix.arch }},mode=max" \
+            --metadata-file "$RUNNER_TEMP/metadata.json" \
+            --output "type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true" .
+          DIGEST="$(node -p "require(process.env.RUNNER_TEMP + '/metadata.json')['containerimage.digest']")"
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - name: Keep the digest for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+
+  publish:
+    name: Publish
+    needs: [release, image]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch both digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      - name: Tag the multi-arch image
         id: docker
         shell: bash
         run: |
           set -euo pipefail
 
-          VERSION="${{ steps.version.outputs.version }}"
-          CHANNEL="${{ steps.channel.outputs.channel }}"
+          VERSION="${{ needs.release.outputs.version }}"
+          CHANNEL="${{ needs.release.outputs.channel }}"
 
           V_MAJOR="$(echo "$VERSION" | cut -d. -f1)"
           V_MINOR="$(echo "$VERSION" | cut -d. -f2)"
@@ -241,20 +316,24 @@ jobs:
             ARGS+=(-t "$TAG")
           done
 
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --build-arg IMAGE_WORKER_VERSION="${{ steps.version.outputs.version }}" \
-            --cache-from type=registry,ref=${IMAGE}:buildcache \
-            --cache-to type=registry,ref=${IMAGE}:buildcache,mode=max \
-            "${ARGS[@]}" \
-            --push .
+          SOURCES=()
+          for D in "$RUNNER_TEMP"/digests/*; do
+            SOURCES+=("${IMAGE}@sha256:$(basename "$D")")
+          done
+          if [[ ${#SOURCES[@]} -ne 2 ]]; then
+            echo "Expected two digests, got ${#SOURCES[@]}"
+            exit 1
+          fi
+
+          docker buildx imagetools create "${ARGS[@]}" "${SOURCES[@]}"
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Gryt Image Worker v${{ steps.version.outputs.version }}
-          prerelease: ${{ steps.channel.outputs.channel == 'beta' }}
+          tag_name: v${{ needs.release.outputs.version }}
+          name: Gryt Image Worker v${{ needs.release.outputs.version }}
+          prerelease: ${{ needs.release.outputs.channel == 'beta' }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -264,12 +343,12 @@ jobs:
         uses: Gryt-chat/.github/actions/release-notify@main
         with:
           component: Image Worker
-          version: ${{ steps.version.outputs.version }}
-          channel: ${{ steps.channel.outputs.channel }}
+          version: ${{ needs.release.outputs.version }}
+          channel: ${{ needs.release.outputs.channel }}
           repository: Gryt-chat/image-worker
-          tag: v${{ steps.version.outputs.version }}
+          tag: v${{ needs.release.outputs.version }}
           artifact-label: Docker
-          artifact-value: ghcr.io/gryt-chat/image-worker:${{ steps.version.outputs.version }}
+          artifact-value: ghcr.io/gryt-chat/image-worker:${{ needs.release.outputs.version }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           discord-webhook-url: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
           gryt-webhook-url: ${{ secrets.GRYT_RELEASE_WEBHOOK_URL }}
@@ -277,7 +356,7 @@ jobs:
       # A stable release moves latest-beta too, unless a newer beta is already there, so beta never
       # runs behind prod (GRYT-1236). Last, and gated on the push, so it can't cost the release.
       - name: Bring latest-beta up to this release
-        if: ${{ !cancelled() && steps.docker.outcome == 'success' && steps.channel.outputs.channel == 'latest' }}
+        if: ${{ !cancelled() && steps.docker.outcome == 'success' && needs.release.outputs.channel == 'latest' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -288,7 +367,7 @@ jobs:
             exit 1
           fi
 
-          TARGET="$(node "$RUNNER_TEMP/beta-follows-latest.mjs" "$IMAGE" "${{ steps.version.outputs.version }}")"
+          TARGET="$(node "$RUNNER_TEMP/beta-follows-latest.mjs" "$IMAGE" "${{ needs.release.outputs.version }}")"
           if [[ -n "$TARGET" ]]; then
             docker buildx imagetools create -t "${IMAGE}:latest-beta" "${IMAGE}@${TARGET}"
           fi
