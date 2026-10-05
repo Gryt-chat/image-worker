@@ -1,8 +1,5 @@
-/**
- * Uploads the server puts under `quarantine/` are never served as sent. Each one is
- * decoded and written out again from its pixels, at the size its use needs, and only
- * the new file reaches anybody. The prefix says which use (GRYT-1664).
- */
+/** Uploads under `quarantine/` are never served as sent: each is decoded and written out again
+ *  at the size its use needs, and only the new file reaches anybody (GRYT-1664). */
 
 import sharp from "sharp";
 
