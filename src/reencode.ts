@@ -25,7 +25,8 @@ const PROFILES: Record<Use, Profile> = {
   upload: { prefix: "uploads", fit: "inside", width: 4096, height: 4096, animatedMax: 1024, thumb: { width: 320 } },
   banner: { prefix: "banners", fit: "cover", width: 960, height: 492, animatedMax: 960, thumb: { width: 480, height: 246 } },
   avatar: { prefix: "avatars", fit: "cover", width: 256, height: 256, animatedMax: 256, thumb: { width: 128, height: 128 } },
-  emoji: { prefix: "emojis", fit: "inside", width: 128, height: 128, animatedMax: 128, thumb: null },
+  // 128 tall at any width up to 512, as the server's own emoji step drew them, so a wide one stays wide.
+  emoji: { prefix: "emojis", fit: "inside", width: 512, height: 128, animatedMax: 512, thumb: null },
 };
 
 const QUARANTINE_USE: Array<[string, Use]> = [
