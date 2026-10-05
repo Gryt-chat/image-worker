@@ -42,22 +42,22 @@ RUN cd "SVT-AV1-v${SVTAV1_VERSION}" \
       -DBUILD_TESTING=OFF -DCMAKE_INSTALL_PREFIX=/opt/svtav1 -DCMAKE_INSTALL_LIBDIR=lib \
  && cmake --build build && cmake --install build
 
-# Everything off, then the two demuxers, five decoders, PNG and AV1 out, MP4 for the video,
-# the filters a transcode needs, and the fd and pipe protocols.
+# Everything off, then the two demuxers, the video and audio decoders, PNG, AV1 and AAC out,
+# MP4 for the video, the filters a transcode needs, and the fd and pipe protocols.
 RUN cd "ffmpeg-${FFMPEG_VERSION}" \
  && PKG_CONFIG_PATH=/opt/dav1d/lib/pkgconfig:/opt/svtav1/lib/pkgconfig ./configure \
       --enable-pic --pkg-config-flags=--static --extra-ldexeflags=-static-pie \
       --extra-cflags="-fstack-protector-strong -D_FORTIFY_SOURCE=2" --extra-ldflags="-Wl,-z,relro,-z,now" \
       --disable-everything --disable-autodetect --disable-network \
       --disable-doc --disable-debug --disable-ffprobe --disable-ffplay \
-      --disable-avdevice --disable-swresample \
+      --disable-avdevice \
       --enable-zlib --enable-libdav1d --enable-libsvtav1 \
       --enable-protocol=fd,pipe \
       --enable-demuxer=mov,matroska \
-      --enable-decoder=h264,hevc,vp8,vp9,libdav1d \
-      --enable-parser=h264,hevc,vp8,vp9,av1 \
-      --enable-encoder=png,libsvtav1 --enable-muxer=image2pipe,mp4 \
-      --enable-filter=scale,fps,crop,setsar,format \
+      --enable-decoder=h264,hevc,vp8,vp9,libdav1d,aac,mp3,mp3float,opus,vorbis,flac,pcm_s16le,pcm_f32le \
+      --enable-parser=h264,hevc,vp8,vp9,av1,aac,mpegaudio,opus,vorbis,flac \
+      --enable-encoder=png,libsvtav1,aac --enable-muxer=image2pipe,mp4 \
+      --enable-filter=scale,fps,crop,setsar,format,aresample,aformat,anull \
  && make -j"$(nproc)" ffmpeg \
  && mkdir /out && strip -o /out/ffmpeg ffmpeg
 

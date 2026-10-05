@@ -4,6 +4,8 @@ import type { Use } from "./reencode";
 import type { JailResult } from "./reencodeResult";
 
 const TIMEOUT_MS = 150_000;
+// The app gives a chat video ten minutes, so this waits a little past that.
+const CHAT_VIDEO_TIMEOUT_MS = 10 * 60_000 + 30_000;
 const MAX_ANSWER_BYTES = 64 * 1024 * 1024;
 const VIDEO_BOX = { banner: { width: 960, height: 492 }, avatar: { width: 256, height: 256 } } as const;
 
@@ -38,14 +40,14 @@ function listen(): void {
   });
 }
 
-function ask(kind: "image" | "video" | "poster", use: string, bytes: Buffer): Promise<unknown> {
+function ask(kind: "image" | "video" | "poster" | "chatvideo", use: string, bytes: Buffer): Promise<unknown> {
   listen();
   const id = nextId++;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       waiting.delete(id);
       reject(new Error("The media sandbox ran out of time"));
-    }, TIMEOUT_MS);
+    }, kind === "chatvideo" ? CHAT_VIDEO_TIMEOUT_MS : TIMEOUT_MS);
     waiting.set(id, { resolve, reject, timer });
     process.send!({ type: "gryt-media-job", id, job: { kind, use, bytes } }, undefined, undefined, (err) => {
       if (!err) return;
@@ -108,6 +110,23 @@ export function checkPosterAnswer(answer: unknown): Buffer {
 
 export async function posterOnDesktop(bytes: Buffer): Promise<Buffer> {
   return checkPosterAnswer(await ask("poster", "upload", bytes));
+}
+
+/** A chat video converted with its sound: an MP4 inside 1280px, and a JPEG poster. */
+export function checkChatVideoAnswer(answer: unknown): DesktopVideo {
+  const a = (answer ?? {}) as Record<string, unknown>;
+  if (a.ok !== true) throw new Error(typeof a.reason === "string" ? a.reason.slice(0, 200) : "The video could not be decoded");
+  const video = bytesOf(a.video);
+  const poster = bytesOf(a.poster);
+  if (a.kind !== "chatvideo" || !video || !isMp4(video) || !poster || !isJpeg(poster)
+    || !positive(a.width, 1280) || !positive(a.height, 1280)) {
+    throw new Error("Bad result from the media sandbox");
+  }
+  return { video, poster, width: a.width, height: a.height };
+}
+
+export async function chatVideoOnDesktop(bytes: Buffer): Promise<DesktopVideo> {
+  return checkChatVideoAnswer(await ask("chatvideo", "upload", bytes));
 }
 
 export async function reencodeOnDesktop(bytes: Buffer, use: Use): Promise<JailResult> {

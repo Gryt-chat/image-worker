@@ -18,11 +18,11 @@ import {
   updateImageJobStatus,
 } from "./db";
 import { findDominantColor, processUploadedImage } from "./processImage";
-import { hasDesktopSandbox, posterOnDesktop, transcodeOnDesktop } from "./desktopSandbox";
+import { chatVideoOnDesktop, hasDesktopSandbox, posterOnDesktop, transcodeOnDesktop } from "./desktopSandbox";
 import { reencodeInJail } from "./jailedReencode";
 import { MAX_QUARANTINE_BYTES, outputKeys, useOfKey } from "./reencode";
 import { deleteObject, getObjectAsBuffer, getObjectToFile, initStorage, putObject } from "./storage";
-import { transcodeVideo } from "./transcode";
+import { transcodeChatVideo, transcodeVideo } from "./transcode";
 import { findFrameTools, processUploadedVideo, run } from "./videoPoster";
 
 function clampInt(
@@ -92,6 +92,8 @@ async function runOne(jobId: string): Promise<void> {
       const videoUse = useOfKey(job.raw_s3_key);
       if (videoUse === "banner" || videoUse === "avatar") {
         await runVideoJob(jobId, job.file_id, job.raw_s3_key, job.raw_bytes, videoUse, bucket);
+      } else if (videoUse === "upload") {
+        await runChatVideoJob(jobId, job.file_id, job.raw_s3_key, job.raw_bytes, bucket);
       } else {
         await runPosterJob(jobId, job.file_id, job.raw_s3_key, job.raw_bytes, bucket);
       }
@@ -227,6 +229,32 @@ async function desktopPoster(bucket: string, fileId: string, rawKey: string, raw
     return { thumbKey, refused: false, reason: null };
   } catch (e) {
     return { thumbKey: null, refused: true, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/* A chat video keeps its sound and shape, but is written out again like an avatar video:
+   nothing of the upload is served (GRYT-1669). */
+async function runChatVideoJob(jobId: string, fileId: string, rawKey: string, rawBytes: number, bucket: string): Promise<void> {
+  if (rawBytes > MAX_QUARANTINE_BYTES) throw new Error("Video is too large to process");
+  const dir = await mkdtemp(join(tmpdir(), "gryt-chat-video-"));
+  try {
+    const inputPath = join(dir, "input");
+    await getObjectToFile(bucket, rawKey, inputPath);
+    const out = !ffmpegJailWorks && hasDesktopSandbox()
+      ? { ok: true as const, ...(await chatVideoOnDesktop(await readFile(inputPath))) }
+      : await transcodeChatVideo(inputPath, frameTools);
+    if (!out.ok) throw new Error(out.reason);
+    const key = `uploads/${fileId}.mp4`;
+    const thumbKey = `thumbnails/${fileId}.jpg`;
+    await putObject(bucket, key, out.video, "video/mp4");
+    await putObject(bucket, thumbKey, out.poster, "image/jpeg");
+    updateFileRecord(fileId, { s3_key: key, mime: "video/mp4", size: out.video.length, width: out.width, height: out.height, thumbnail_key: thumbKey });
+    updateImageJobStatus({ job_id: jobId, status: "done" });
+    await deleteObject(bucket, rawKey).catch((e) => consola.warn(`[ImageWorker] Could not delete ${rawKey}`, e));
+    processedCount++;
+    consola.info(`[ImageWorker] Job ${jobId} done (file=${fileId}, chat video, ${out.width}x${out.height}, ${out.video.length} bytes)`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 }
 
@@ -425,7 +453,7 @@ function startHealthServer(): void {
         errors: errorCount,
         inFlight,
         // The server writes uploads to quarantine only once the worker says it clears them.
-        capabilities: canClearQuarantine() ? ["quarantine-v1", ...(ffmpegJailWorks || hasDesktopSandbox() ? ["video-v1"] : [])] : [],
+        capabilities: canClearQuarantine() ? ["quarantine-v1", ...(ffmpegJailWorks || hasDesktopSandbox() ? ["video-v1", "chatvideo-v1"] : [])] : [],
       }),
     );
   });
