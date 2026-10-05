@@ -10,41 +10,54 @@ RUN yarn build
 # ffmpeg and dav1d are pinned by hash. Bumping one means checking the release's
 # signature first: the FFmpeg release key and the VideoLAN release key.
 FROM --platform=$TARGETPLATFORM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS ffmpeg
-RUN apk add --no-cache build-base linux-headers meson nasm pkgconf zlib-dev zlib-static
+RUN apk add --no-cache build-base linux-headers meson nasm pkgconf zlib-dev zlib-static cmake samurai
 WORKDIR /build
 
 ARG FFMPEG_VERSION=9.0.2
 ARG FFMPEG_SHA256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
 ARG DAV1D_VERSION=1.5.4
 ARG DAV1D_SHA256=686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5
+# The AV1 encoder, for banner and avatar videos (GRYT-1664). GitLab's tag archive, pinned by hash.
+ARG SVTAV1_VERSION=4.2.0
+ARG SVTAV1_SHA256=c7b13c4a84bd3751aa35fcc72be13e6875467e7c2216879251a486e5b1e4e740
 
 RUN wget -q "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
+ && wget -q -O svtav1.tar.gz "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v${SVTAV1_VERSION}/SVT-AV1-v${SVTAV1_VERSION}.tar.gz" \
  && wget -q "https://download.videolan.org/pub/videolan/dav1d/${DAV1D_VERSION}/dav1d-${DAV1D_VERSION}.tar.xz" \
  && printf '%s  %s\n' \
       "$FFMPEG_SHA256" "ffmpeg-${FFMPEG_VERSION}.tar.xz" \
-      "$DAV1D_SHA256" "dav1d-${DAV1D_VERSION}.tar.xz" | sha256sum -c - \
+      "$DAV1D_SHA256" "dav1d-${DAV1D_VERSION}.tar.xz" \
+      "$SVTAV1_SHA256" "svtav1.tar.gz" | sha256sum -c - \
  && tar xf "ffmpeg-${FFMPEG_VERSION}.tar.xz" \
- && tar xf "dav1d-${DAV1D_VERSION}.tar.xz"
+ && tar xf "dav1d-${DAV1D_VERSION}.tar.xz" \
+ && tar xf svtav1.tar.gz
 
 RUN cd "dav1d-${DAV1D_VERSION}" \
  && meson setup build --buildtype=release --default-library=static --prefix=/opt/dav1d --libdir=lib \
       -Denable_tools=false -Denable_tests=false -Denable_examples=false \
  && ninja -C build install
 
-# Everything off, then the two demuxers, five decoders, PNG out and the fd and pipe protocols.
+RUN cd "SVT-AV1-v${SVTAV1_VERSION}" \
+ && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_APPS=OFF \
+      -DBUILD_TESTING=OFF -DCMAKE_INSTALL_PREFIX=/opt/svtav1 -DCMAKE_INSTALL_LIBDIR=lib \
+ && cmake --build build && cmake --install build
+
+# Everything off, then the two demuxers, five decoders, PNG and AV1 out, MP4 for the video,
+# the filters a transcode needs, and the fd and pipe protocols.
 RUN cd "ffmpeg-${FFMPEG_VERSION}" \
- && PKG_CONFIG_PATH=/opt/dav1d/lib/pkgconfig ./configure \
+ && PKG_CONFIG_PATH=/opt/dav1d/lib/pkgconfig:/opt/svtav1/lib/pkgconfig ./configure \
       --enable-pic --pkg-config-flags=--static --extra-ldexeflags=-static-pie \
       --extra-cflags="-fstack-protector-strong -D_FORTIFY_SOURCE=2" --extra-ldflags="-Wl,-z,relro,-z,now" \
       --disable-everything --disable-autodetect --disable-network \
       --disable-doc --disable-debug --disable-ffprobe --disable-ffplay \
       --disable-avdevice --disable-swresample \
-      --enable-zlib --enable-libdav1d \
+      --enable-zlib --enable-libdav1d --enable-libsvtav1 \
       --enable-protocol=fd,pipe \
       --enable-demuxer=mov,matroska \
       --enable-decoder=h264,hevc,vp8,vp9,libdav1d \
       --enable-parser=h264,hevc,vp8,vp9,av1 \
-      --enable-encoder=png --enable-muxer=image2pipe --enable-filter=scale \
+      --enable-encoder=png,libsvtav1 --enable-muxer=image2pipe,mp4 \
+      --enable-filter=scale,fps,crop,setsar,format \
  && make -j"$(nproc)" ffmpeg \
  && mkdir /out && strip -o /out/ffmpeg ffmpeg
 
