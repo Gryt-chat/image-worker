@@ -1,4 +1,4 @@
-/* ffjail: runs ffmpeg as its own user in an empty chroot, one decode per connection.
+/* ffjail: runs ffmpeg as its own user in a chroot holding only ffmpeg, one decode per connection.
    `serve` is started as root by the entrypoint; `run` is what the worker spawns. */
 
 #define _GNU_SOURCE
@@ -118,14 +118,13 @@ static void set_limit(int resource, rlim_t value) {
     if (setrlimit(resource, &rl) != 0) give_up("setrlimit");
 }
 
-static void exec_decoder(int decoder, const int fds[NFDS], const struct header *h, char **argv) {
+static void exec_decoder(const char *decoder, const int fds[NFDS], const struct header *h, char **argv) {
     int high[NFDS];
     for (int i = 0; i < NFDS; i++)
         if ((high[i] = fcntl(fds[i], F_DUPFD_CLOEXEC, 16)) < 0) give_up("dup");
     for (int i = 0; i < NFDS; i++)
         if (dup2(high[i], i) != i) give_up("dup2");
-    for (int fd = NFDS; fd < 1024; fd++)
-        if (fd != decoder) close(fd);
+    for (int fd = NFDS; fd < 1024; fd++) close(fd);
 
     set_limit(RLIMIT_AS, h->memory_bytes);
     set_limit(RLIMIT_CPU, h->timeout_ms / 1000 + 5);
@@ -135,7 +134,9 @@ static void exec_decoder(int decoder, const int fds[NFDS], const struct header *
     if (lock_down() != 0) give_up("seccomp");
 
     char *envp[] = {NULL};
-    syscall(SYS_execveat, decoder, "", argv, envp, AT_EMPTY_PATH);
+    /* By path inside the chroot: an fd opened outside it fails to exec with ENOENT on
+       Debian's 6.1 kernel, which is what dev.lan runs (GRYT-1664). */
+    execve(decoder, argv, envp);
     give_up("exec");
 }
 
@@ -147,7 +148,7 @@ static long long now_ms(void) {
 
 /* One per connection. Kills the decoder when the worker hangs up or time runs out,
    then answers with its wait status. */
-static void watch(int conn, int decoder) {
+static void watch(int conn, const char *decoder) {
     static char buf[MAX_REQUEST];
     union {
         char bytes[CMSG_SPACE(sizeof(int) * NFDS)];
@@ -207,13 +208,6 @@ static int serve(char **args) {
         return 2;
     }
 
-    /* Held above fd 3, which the decoder's input takes. */
-    int opened = open(decoder_path, O_PATH | O_CLOEXEC);
-    if (opened < 0) die(decoder_path);
-    int decoder = fcntl(opened, F_DUPFD_CLOEXEC, 100);
-    if (decoder < 0) die("dup");
-    close(opened);
-
     struct sockaddr_un addr = socket_address(path);
     int lsock = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (lsock < 0) die("socket");
@@ -233,6 +227,8 @@ static int serve(char **args) {
         return 2;
     }
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 || prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) die("prctl");
+    /* The decoder is a path inside the jail, checked as the jail user it will run as. */
+    if (decoder_path[0] != '/' || access(decoder_path, X_OK) != 0) die(decoder_path);
 
     /* The parent returns once the socket listens, so the entrypoint knows it's up. */
     pid_t pid = fork();
@@ -250,7 +246,7 @@ static int serve(char **args) {
         if (fork() == 0) {
             close(lsock);
             signal(SIGCHLD, SIG_DFL);
-            watch(conn, decoder);
+            watch(conn, decoder_path);
         }
         close(conn);
     }

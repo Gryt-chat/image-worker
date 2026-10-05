@@ -47,8 +47,10 @@ static void list_dir(const char *name, const char *path) {
     if (!d) return attempt(name, -1);
     int count = 0;
     struct dirent *e;
+    /* The decoders themselves are in the jail, since ffjail runs them by path; anything else counts. */
     while ((e = readdir(d)))
-        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) count++;
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..") && strcmp(e->d_name, "ffmpeg") && strcmp(e->d_name, "probe"))
+            count++;
     closedir(d);
     char detail[32];
     snprintf(detail, sizeof detail, "%d-entries", count);

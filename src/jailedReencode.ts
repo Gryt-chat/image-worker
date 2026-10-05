@@ -38,7 +38,7 @@ export async function reencodeInJail(
     const result = await run(client, argv, input, JAIL_TIMEOUT_MS + 5_000);
     if (result.timedOut) throw new Error("The image jail ran out of time");
     if (result.tooBig) throw new Error("The image jail's answer was over the size cap");
-    if (result.code === JAIL_FAILED) throw new Error("The image jail could not start the decoder");
+    if (result.code === JAIL_FAILED) throw new Error(`The image jail could not start the decoder: ${result.stderr.trim().slice(0, 200)}`);
     if (result.code !== 0) throw new Error("The upload could not be decoded");
     return unpackResult(result.stdout);
   } finally {

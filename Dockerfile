@@ -62,14 +62,15 @@ RUN yarn install --production --ignore-engines --network-timeout 600000
 
 FROM --platform=$TARGETPLATFORM node:22-bookworm-slim
 
-# ffmpeg isn't on PATH: it only runs through ffjail, as gryt-ff, in the empty /opt/gryt-ff/jail.
-COPY --from=ffmpeg /out/ffmpeg /opt/gryt-ff/ffmpeg
+# ffmpeg isn't on PATH: it only runs through ffjail, as gryt-ff, in /opt/gryt-ff/jail, which holds
+# nothing else. ffjail runs it by its path in there.
+COPY --from=ffmpeg /out/ffmpeg /opt/gryt-ff/jail/ffmpeg
 COPY --from=ffjail /build/ffjail /usr/local/bin/ffjail
 COPY jail/entrypoint.sh /usr/local/bin/gryt-entrypoint
 
 RUN groupadd -g 1001 gryt && useradd -m -u 1001 -g 1001 -d /app -s /usr/sbin/nologin gryt \
  && groupadd -g 1002 gryt-ff && useradd -M -u 1002 -g 1002 -d /nonexistent -s /usr/sbin/nologin gryt-ff \
- && install -d -m 0555 /opt/gryt-ff/jail \
+ && chmod 0555 /opt/gryt-ff/jail /opt/gryt-ff/jail/ffmpeg \
  && install -d -m 0750 -g gryt /run/gryt-ff
 ENV FFJAIL_SOCKET=/run/gryt-ff/ffjail.sock
 WORKDIR /app
