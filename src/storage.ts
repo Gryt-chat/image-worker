@@ -66,13 +66,11 @@ function getBackend(): StorageBackend {
   return backend;
 }
 
-/** S3 went in 1.11.0. Starting anyway would read an empty folder and fail every upload. */
+/** Disk only. The server copies an old S3 bucket into the same folder on its first start. */
 export async function initStorage(): Promise<void> {
   const named = (process.env.STORAGE_BACKEND || "").trim().toLowerCase();
   if ((named && named !== "filesystem") || (process.env.S3_ENDPOINT || "").trim()) {
-    throw new Error(
-      "This worker is still set up for S3, and Gryt 1.11.0 stores files on disk only. Point DATA_DIR at the server's data and remove STORAGE_BACKEND and S3_ENDPOINT.",
-    );
+    console.warn("S3 settings are set but ignored: uploads are read from and written to DATA_DIR.");
   }
   fsDataDir = process.env.DATA_DIR || "./data";
   // The server defaults to the same folder, so a compose file can leave both unset.
