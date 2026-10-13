@@ -1,3 +1,4 @@
+import consola from "consola";
 import { constants, existsSync } from "fs";
 import { copyFile, mkdir, readFile, unlink, writeFile } from "fs/promises";
 import { dirname, join } from "path";
@@ -70,7 +71,7 @@ function getBackend(): StorageBackend {
 export async function initStorage(): Promise<void> {
   const named = (process.env.STORAGE_BACKEND || "").trim().toLowerCase();
   if ((named && named !== "filesystem") || (process.env.S3_ENDPOINT || "").trim()) {
-    console.warn("S3 settings are set but ignored: uploads are read from and written to DATA_DIR.");
+    consola.warn("S3 settings are set but ignored: uploads are read from and written to DATA_DIR.");
   }
   fsDataDir = process.env.DATA_DIR || "./data";
   // The server defaults to the same folder, so a compose file can leave both unset.
