@@ -66,13 +66,7 @@ If you accept that, set `GRYT_ALLOW_HOST_FFMPEG=1`.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATA_DIR` | `./data` | Path to the shared data directory (contains `gryt.db`) |
-| `S3_BUCKET` | — | S3 bucket name (or subdirectory name for filesystem storage) |
-| `STORAGE_BACKEND` | `s3` | Storage backend: `s3` or `filesystem` |
-| `S3_ENDPOINT` | — | S3-compatible endpoint (e.g. MinIO) |
-| `S3_REGION` | `auto` | S3 region |
-| `S3_ACCESS_KEY_ID` | — | S3 access key |
-| `S3_SECRET_ACCESS_KEY` | — | S3 secret key |
-| `S3_FORCE_PATH_STYLE` | `false` | Use path-style S3 URLs (required for MinIO) |
+| `S3_BUCKET` | `gryt` | Folder under `DATA_DIR` that uploads live in. Has to match the server's |
 | `IMAGE_WORKER_CONCURRENCY` | `2` | Max concurrent image processing jobs (1–8) |
 | `IMAGE_WORKER_POLL_MS` | `1000` | Database polling interval in milliseconds (250–10000) |
 | `HEALTH_PORT` | `8080` | HTTP health check port |

@@ -1,9 +1,6 @@
-import type { S3Client as S3ClientType } from "@aws-sdk/client-s3";
-import { constants, createWriteStream, existsSync } from "fs";
+import { constants, existsSync } from "fs";
 import { copyFile, mkdir, readFile, unlink, writeFile } from "fs/promises";
 import { dirname, join } from "path";
-import type { Readable } from "stream";
-import { pipeline } from "stream/promises";
 
 interface StorageBackend {
   getObjectAsBuffer(bucket: string, key: string): Promise<Buffer>;
@@ -11,51 +8,6 @@ interface StorageBackend {
   putObject(bucket: string, key: string, body: Buffer, contentType?: string): Promise<void>;
   deleteObject(bucket: string, key: string): Promise<void>;
 }
-
-// ── S3 backend (lazy-loaded so the SDK is optional at runtime) ──────────────
-
-let s3: S3ClientType | null = null;
-let s3Sdk: typeof import("@aws-sdk/client-s3") | null = null;
-
-function getS3(): S3ClientType {
-  if (!s3) throw new Error("S3 not initialized");
-  return s3;
-}
-
-function getSdk(): typeof import("@aws-sdk/client-s3") {
-  if (!s3Sdk) throw new Error("S3 SDK not loaded");
-  return s3Sdk;
-}
-
-const s3Backend: StorageBackend = {
-  async getObjectAsBuffer(bucket, key) {
-    const { GetObjectCommand } = getSdk();
-    const res = await getS3().send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-    const body = res.Body;
-    if (!body) throw new Error(`Empty S3 body for ${key}`);
-    const bytes = await body.transformToByteArray();
-    return Buffer.from(bytes);
-  },
-
-  async getObjectToFile(bucket, key, dest) {
-    const { GetObjectCommand } = getSdk();
-    const res = await getS3().send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-    if (!res.Body) throw new Error(`Empty S3 body for ${key}`);
-    await pipeline(res.Body as Readable, createWriteStream(dest, { flags: "wx", mode: 0o600 }));
-  },
-
-  async putObject(bucket, key, body, contentType) {
-    const { PutObjectCommand } = getSdk();
-    await getS3().send(
-      new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }),
-    );
-  },
-
-  async deleteObject(bucket, key) {
-    const { DeleteObjectCommand } = getSdk();
-    await getS3().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
-  },
-};
 
 // ── Filesystem backend ──────────────────────────────────────────────────────
 
@@ -114,30 +66,18 @@ function getBackend(): StorageBackend {
   return backend;
 }
 
+/** S3 went in 1.11.0. Starting anyway would read an empty folder and fail every upload. */
 export async function initStorage(): Promise<void> {
-  const storageType = (process.env.STORAGE_BACKEND || "s3").toLowerCase();
-  if (storageType === "filesystem") {
-    fsDataDir = process.env.DATA_DIR || "./data";
-    // The server defaults to the same folder, so a compose file can leave both unset.
-    if (!(process.env.S3_BUCKET || "").trim()) process.env.S3_BUCKET = "gryt";
-    backend = fsBackend;
-  } else {
-    const sdk = await import("@aws-sdk/client-s3");
-    s3Sdk = sdk;
-    s3 = new sdk.S3Client({
-      region: process.env.S3_REGION || "auto",
-      endpoint: process.env.S3_ENDPOINT,
-      forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
-      credentials:
-        process.env.S3_ACCESS_KEY_ID && process.env.S3_SECRET_ACCESS_KEY
-          ? {
-              accessKeyId: process.env.S3_ACCESS_KEY_ID,
-              secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
-            }
-          : undefined,
-    });
-    backend = s3Backend;
+  const named = (process.env.STORAGE_BACKEND || "").trim().toLowerCase();
+  if ((named && named !== "filesystem") || (process.env.S3_ENDPOINT || "").trim()) {
+    throw new Error(
+      "This worker is still set up for S3, and Gryt 1.11.0 stores files on disk only. Point DATA_DIR at the server's data and remove STORAGE_BACKEND and S3_ENDPOINT.",
+    );
   }
+  fsDataDir = process.env.DATA_DIR || "./data";
+  // The server defaults to the same folder, so a compose file can leave both unset.
+  if (!(process.env.S3_BUCKET || "").trim()) process.env.S3_BUCKET = "gryt";
+  backend = fsBackend;
 }
 
 export function getObjectAsBuffer(bucket: string, key: string): Promise<Buffer> {
