@@ -9,7 +9,7 @@ import path from "node:path";
 
 // The image's own build, by absolute path. The types come from the source it was built from.
 const require = createRequire(import.meta.url);
-const sharp = require("/app/node_modules/sharp") as typeof import("sharp");
+const sharp = require("/app/node_modules/sharp") as typeof import("sharp").default;
 const { initStorage } = require("/app/dist/storage.js") as typeof import("../../src/storage.ts");
 const vp = require("/app/dist/videoPoster.js") as typeof import("../../src/videoPoster.ts");
 
