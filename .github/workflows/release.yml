@@ -184,13 +184,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          GATE="https://raw.githubusercontent.com/Gryt-chat/gryt/main/.github/scripts/check-release-line.mjs"
-          if ! curl -fsSL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/check-release-line.mjs" "$GATE"; then
+          GATE="https://raw.githubusercontent.com/Gryt-chat/gryt/main/.github/scripts/check-release-line.mts"
+          if ! curl -fsSL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/check-release-line.mts" "$GATE"; then
             echo "Could not download $GATE, so the line was not checked. Nothing is tagged yet."
             exit 1
           fi
 
-          node "$RUNNER_TEMP/check-release-line.mjs" images "${{ steps.version.outputs.version }}"
+          node "$RUNNER_TEMP/check-release-line.mts" images "${{ steps.version.outputs.version }}"
 
       - name: Tag the release
         shell: bash
@@ -361,13 +361,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          SCRIPT="https://raw.githubusercontent.com/Gryt-chat/gryt/main/.github/scripts/beta-follows-latest.mjs"
-          if ! curl -fsSL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/beta-follows-latest.mjs" "$SCRIPT"; then
+          SCRIPT="https://raw.githubusercontent.com/Gryt-chat/gryt/main/.github/scripts/beta-follows-latest.mts"
+          if ! curl -fsSL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/beta-follows-latest.mts" "$SCRIPT"; then
             echo "Could not download $SCRIPT, so latest-beta was left where it is."
             exit 1
           fi
 
-          TARGET="$(node "$RUNNER_TEMP/beta-follows-latest.mjs" "$IMAGE" "${{ needs.release.outputs.version }}")"
+          TARGET="$(node "$RUNNER_TEMP/beta-follows-latest.mts" "$IMAGE" "${{ needs.release.outputs.version }}")"
           if [[ -n "$TARGET" ]]; then
             docker buildx imagetools create -t "${IMAGE}:latest-beta" "${IMAGE}@${TARGET}"
           fi
