@@ -1,27 +1,29 @@
-"use strict";
 // Runs inside the built image as the worker does, against /fixtures and the probe jail.
 
-const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
 
-const sharp = require("/app/node_modules/sharp");
-const { initStorage } = require("/app/dist/storage.js");
-const vp = require("/app/dist/videoPoster.js");
+// The image's own build, by absolute path. The types come from the source it was built from.
+const require = createRequire(import.meta.url);
+const sharp = require("/app/node_modules/sharp") as typeof import("sharp");
+const { initStorage } = require("/app/dist/storage.js") as typeof import("../../src/storage.ts");
+const vp = require("/app/dist/videoPoster.js") as typeof import("../../src/videoPoster.ts");
 
 const tools = vp.findFrameTools();
-const at = (name) => path.join("/fixtures", name);
+const at = (name: string) => path.join("/fixtures", name);
 let failures = 0;
 
-async function check(name, fn) {
+async function check(name: string, fn: () => Promise<string | void>): Promise<void> {
   try {
     const note = await fn();
     console.log(`ok    ${name}${note ? `  (${note})` : ""}`);
   } catch (err) {
     failures++;
-    console.log(`FAIL  ${name}: ${err.message}`);
+    console.log(`FAIL  ${name}: ${(err as Error).message}`);
   }
 }
 
@@ -33,19 +35,21 @@ const refused = [
   "random.mp4", "text.mp4", "png.mp4", "cut40k.mp4", "clip.avi", "avi.mp4", "clip.flv", "mpeg4.mp4",
 ];
 
-function runProbe(cmd, argv) {
+type Probe = Record<string, { yes: boolean; detail: string }>;
+
+function runProbe(cmd: string, argv: string[]): Promise<Probe> {
   return new Promise((resolve, reject) => {
     const input = fs.openSync(at("h264-aac.mp4"), "r");
     const child = spawn(cmd, argv, { env: {}, stdio: ["ignore", "pipe", "pipe", input] });
     fs.closeSync(input);
     let out = "";
     let err = "";
-    child.stdout.on("data", (c) => (out += c));
-    child.stderr.on("data", (c) => (err += c));
+    child.stdout!.on("data", (c: Buffer) => (out += c));
+    child.stderr!.on("data", (c: Buffer) => (err += c));
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0) return reject(new Error(`probe exited ${code}: ${err.trim()}`));
-      const result = {};
+      const result: Probe = {};
       for (const line of out.trim().split("\n")) {
         const [name, yes, ...detail] = line.split(" ");
         result[name] = { yes: yes === "yes", detail: detail.join(" ") };
@@ -81,18 +85,18 @@ async function main() {
   }
 
   // GRYT-1664: a banner or avatar video is written out again, one size, no sound, ten seconds at most.
-  const tc = require("/app/dist/transcode.js");
+  const tc = require("/app/dist/transcode.js") as typeof import("../../src/transcode.ts");
   for (const [name, use, width, height] of [
     ["resizing.webm", "banner", 960, 492], ["long-1080p60.mp4", "avatar", 256, 256], ["vp9-opus.webm", "banner", 960, 492],
-  ]) {
+  ] as const) {
     await check(`transcodes ${name} to a ${use}`, async () => {
       const out = await tc.transcodeVideo(at(name), use, tools);
-      assert.equal(out.ok, true, out.reason);
+      assert.ok(out.ok, out.ok ? "" : out.reason);
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tc-"));
       const file = path.join(dir, "out.mp4");
       fs.writeFileSync(file, out.video);
       const frames = await vp.grabFrame(file, tools);
-      assert.equal(frames.ok, true, frames.reason);
+      assert.ok(frames.ok, frames.ok ? "" : frames.reason);
       const meta = await sharp(frames.frame).metadata();
       assert.deepEqual([meta.width, meta.height], [width, height]);
       const text = out.video.toString("latin1");
@@ -146,7 +150,7 @@ async function isolation() {
   await check("ffmpeg runs as gryt-ff with no new privileges and a seccomp filter", async () => {
     let settled = false;
     const pending = vp.grabFrame(at("4k-hevc.mp4"), tools).finally(() => (settled = true));
-    let status = null;
+    let status: string | null = null;
     while (!status && !settled) {
       for (const pid of fs.readdirSync("/proc").filter((p) => /^\d+$/.test(p))) {
         try {
@@ -161,7 +165,8 @@ async function isolation() {
     }
     await pending;
     assert.ok(status, "never saw an ffmpeg process");
-    const field = (name) => status.match(new RegExp(`^${name}:[ \\t]*(.*)$`, "m"))[1].trim();
+    const found = status;
+    const field = (name: string) => found.match(new RegExp(`^${name}:[ \\t]*(.*)$`, "m"))![1].trim();
     assert.match(field("Uid"), /^1002\s+1002\s+1002\s+1002$/);
     assert.match(field("Gid"), /^1002\s+1002\s+1002\s+1002$/);
     assert.equal(field("Groups"), "");
@@ -181,7 +186,9 @@ async function isolation() {
   });
 
   const memory = 256 * 1024 * 1024;
-  const inside = await runProbe(tools.jail.client, [
+  const client = tools.jail?.client;
+  assert.ok(client, "the jail has no client to run the probe through");
+  const inside = await runProbe(client, [
     "run", "/run/gryt-ff/probe.sock", String(memory), "5000", "--", "-probe",
   ]);
   const blocked = [

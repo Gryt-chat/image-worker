@@ -1,3 +1,1 @@
-# Still to move to TypeScript (GRYT-1800). matrix.js runs inside the built image, against /app/dist.
-scripts/check-comment-length.mjs
-test/image/matrix.js
+# One path a line, each under a # comment saying why it has to stay JavaScript.

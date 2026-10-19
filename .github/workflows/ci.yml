@@ -33,6 +33,7 @@ jobs:
       # No comment runs past two lines. The script carries the list of paths still
       # to be swept, and that list only ever shrinks.
       - run: yarn test:comment-length
+      - run: yarn typecheck:scripts
 
       # Code here is TypeScript so its types get checked (GRYT-1800). A file that has to stay
       # JavaScript goes in .js-allowlist, one path a line, with a # comment saying why.

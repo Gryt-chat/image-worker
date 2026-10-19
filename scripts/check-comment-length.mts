@@ -8,15 +8,15 @@ const LIMIT = 2;
 const EMPTY = /^(\/\*+|\*+\/?|\/\/|#)$|[─=]{3,}\s*\*?\/?$/;
 
 /* Paths not swept yet. Delete an entry once that directory is clean. */
-const NOT_YET = [];
+const NOT_YET: string[] = [];
 
 const ROOTS = ["src", "scripts", "jail", "test", ".github/workflows"];
 const SKIP = new Set(["node_modules", "dist", "build", "out", "coverage", ".git"]);
-const CODE = /\.(ts|tsx|js|mjs|cjs|jsx|c)$/;
+const CODE = /\.(ts|mts|cts|tsx|js|mjs|cjs|jsx|c)$/;
 const HASH = /\.(ya?ml|sh)$/;
 
-function files(dir) {
-  const out = [];
+function files(dir: string): string[] {
+  const out: string[] = [];
   for (const name of readdirSync(dir)) {
     if (SKIP.has(name)) continue;
     const full = join(dir, name);
@@ -28,9 +28,9 @@ function files(dir) {
 
 // A run is consecutive comment lines: one block comment, or a stack of // lines.
 // Only lines carrying words count: `/**`, `*/` and a ── section rule are free.
-function runs(text, hash) {
+function runs(text: string, hash: boolean): { line: number; length: number }[] {
   const lines = text.split("\n");
-  const found = [];
+  const found: { line: number; length: number }[] = [];
   let start = -1;
   let length = 0;
   let inBlock = false;
