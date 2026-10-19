@@ -18,9 +18,9 @@ COPY --from=fixtures /fixtures /fixtures
 COPY --from=probe /probe /opt/gryt-ff/probe
 # A second copy inside the jail, since ffjail runs its decoder by a path in there.
 COPY --from=probe /probe /opt/gryt-ff/jail/probe
-COPY entrypoint.sh matrix.js /test/
+COPY entrypoint.sh matrix.mts /test/
 ENV S3_SECRET_ACCESS_KEY=gryt-ff-canary-secret \
     STORAGE_BACKEND=filesystem \
     DATA_DIR=/data
 ENTRYPOINT ["/test/entrypoint.sh"]
-CMD ["node", "/test/matrix.js"]
+CMD ["node", "/test/matrix.mts"]

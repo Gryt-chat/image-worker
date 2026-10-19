@@ -19,7 +19,8 @@
   "scripts": {
     "build": "tsc",
     "test": "node --test --require ts-node/register \"src/**/*.test.ts\"",
-    "test:comment-length": "node scripts/check-comment-length.mjs",
+    "test:comment-length": "node scripts/check-comment-length.mts",
+    "typecheck:scripts": "tsc -p scripts",
     "dev": "node --watch -r ts-node/register src/index.ts",
     "start": "node dist/index.js"
   }
