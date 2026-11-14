@@ -89,13 +89,13 @@ export async function reencode(bytes: Buffer, use: Use): Promise<Reencoded> {
 
   const out = animated
     ? await pipeline.webp({ quality: 75, effort: 4, loop: 0 }).toBuffer({ resolveWithObject: true })
-    : await pipeline.avif({ quality: 60, effort: 4 }).toBuffer({ resolveWithObject: true });
+    : await pipeline.avif({ quality: 60, effort: 2 }).toBuffer({ resolveWithObject: true });
 
   let thumb: Buffer | null = null;
   if (profile.thumb) {
     thumb = await sharp(out.data, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS, pages: 1 })
       .resize({ width: profile.thumb.width, height: profile.thumb.height, fit: "cover", withoutEnlargement: !profile.thumb.height })
-      .avif({ quality: 50 })
+      .avif({ quality: 50, effort: 2 })
       .toBuffer();
   }
 
