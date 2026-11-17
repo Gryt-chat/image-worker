@@ -41,7 +41,7 @@ describe("the image jail's answer", () => {
 describe("reencodeInJail", () => {
   it("re-encodes in process on a dev machine with no jail", async () => {
     const out = await reencodeInJail(await png(), "banner", undefined, false);
-    assert.deepEqual([out.width, out.height], [960, 492]);
+    assert.deepEqual([out.width, out.height], [300, 200]);
     assert.match(out.dominantColor ?? "", /^#[0-9a-f]{6}$/);
   });
 

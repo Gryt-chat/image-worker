@@ -37,11 +37,13 @@ describe("reencode", () => {
     assert.ok(out.thumb);
   });
 
-  it("cuts a banner to the card's own shape", async () => {
-    const out = await reencode(await still(1500, 1500, "jpeg"), "banner");
-    assert.deepEqual([out.width, out.height], [960, 492]);
-    const thumb = await sharp(out.thumb!).metadata();
-    assert.deepEqual([thumb.width, thumb.height], [480, 246]);
+  it("keeps a banner's own shape inside the box, the card's band or the whole card", async () => {
+    for (const [w, h, ow, oh] of [[1920, 984, 960, 492], [1920, 2520, 960, 1260], [1500, 1500, 960, 960]]) {
+      const out = await reencode(await still(w, h, "jpeg"), "banner");
+      assert.deepEqual([out.width, out.height], [ow, oh]);
+      const thumb = await sharp(out.thumb!).metadata();
+      assert.deepEqual([thumb.width, thumb.height], [ow / 2, oh / 2]);
+    }
   });
 
   it("cuts an avatar square, with a 128px thumbnail", async () => {
@@ -62,8 +64,8 @@ describe("reencode", () => {
     assert.equal(out.animated, true);
     const meta = await sharp(out.body, { animated: true }).metadata();
     assert.equal(meta.pages, 3);
-    assert.deepEqual([meta.width, meta.pageHeight], [960, 492]);
-    assert.deepEqual([out.width, out.height], [960, 492]);
+    assert.deepEqual([meta.width, meta.pageHeight], [300, 200]);
+    assert.deepEqual([out.width, out.height], [300, 200]);
   });
 
   it("keeps only the first frames of a very long animation", async () => {
