@@ -124,16 +124,16 @@ export interface RunResult {
   tooBig: boolean;
 }
 
-export async function run(cmd: string, argv: string[], inputPath: string, timeoutMs: number): Promise<RunResult> {
+export async function run(cmd: string, argv: string[], inputPath: string, timeoutMs: number, maxBytes = MAX_FRAME_BYTES): Promise<RunResult> {
   const input = await open(inputPath, "r");
   try {
-    return await spawnWithInput(cmd, argv, input.fd, timeoutMs);
+    return await spawnWithInput(cmd, argv, input.fd, timeoutMs, maxBytes);
   } finally {
     await input.close();
   }
 }
 
-function spawnWithInput(cmd: string, argv: string[], inputFd: number, timeoutMs: number): Promise<RunResult> {
+function spawnWithInput(cmd: string, argv: string[], inputFd: number, timeoutMs: number, maxBytes: number): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     // No shell, and an empty environment so the S3 credentials stay with us.
     const child = spawn(cmd, argv, {
@@ -154,7 +154,7 @@ function spawnWithInput(cmd: string, argv: string[], inputFd: number, timeoutMs:
 
     child.stdout.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_FRAME_BYTES) {
+      if (size > maxBytes) {
         tooBig = true;
         child.kill("SIGKILL");
         return;
