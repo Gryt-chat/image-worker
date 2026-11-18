@@ -1,4 +1,5 @@
 import consola from "consola";
+import type { ChatVideoMode } from "./transcode";
 import { existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import {
@@ -233,6 +234,19 @@ export function listUndersizedAvatarThumbnails(
 }
 
 const DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+
+/** "original" when the server predates the column, like a new server gets. */
+export function getChatVideoMode(): ChatVideoMode {
+  try {
+    const row = getDb()
+      .prepare("SELECT chat_video_mode FROM server_config WHERE id = 'config'")
+      .get() as { chat_video_mode: string | null } | undefined;
+    const mode = row?.chat_video_mode;
+    return mode === "balanced" || mode === "small" ? mode : "original";
+  } catch {
+    return "original";
+  }
+}
 
 export function getUploadMaxBytes(): number {
   const d = getDb();

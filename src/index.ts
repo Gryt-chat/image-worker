@@ -8,6 +8,7 @@ import sharp from "sharp";
 
 import {
   getImageJob,
+  getChatVideoMode,
   getUploadMaxBytes,
   initDb,
   getAvatarThumbPx,
@@ -235,14 +236,16 @@ async function desktopPoster(bucket: string, fileId: string, rawKey: string, raw
 /* A chat video keeps its sound and shape, but is written out again like an avatar video:
    nothing of the upload is served (GRYT-1669). */
 async function runChatVideoJob(jobId: string, fileId: string, rawKey: string, rawBytes: number, bucket: string): Promise<void> {
-  if (rawBytes > MAX_QUARANTINE_BYTES) throw new Error("Video is too large to process");
+  // A remux comes out about the size it went in, so both caps follow the server's upload limit.
+  const cap = Math.max(MAX_QUARANTINE_BYTES, getUploadMaxBytes() + 16 * 1024 * 1024);
+  if (rawBytes > cap) throw new Error("Video is too large to process");
   const dir = await mkdtemp(join(tmpdir(), "gryt-chat-video-"));
   try {
     const inputPath = join(dir, "input");
     await getObjectToFile(bucket, rawKey, inputPath);
     const out = !ffmpegJailWorks && hasDesktopSandbox()
       ? { ok: true as const, ...(await chatVideoOnDesktop(await readFile(inputPath))) }
-      : await transcodeChatVideo(inputPath, frameTools);
+      : await transcodeChatVideo(inputPath, frameTools, getChatVideoMode(), cap);
     if (!out.ok) throw new Error(out.reason);
     const key = `uploads/${fileId}.mp4`;
     const thumbKey = `thumbnails/${fileId}.jpg`;

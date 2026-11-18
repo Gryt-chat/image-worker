@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { chatTranscodeArgs, MAX_VIDEO_SECONDS, transcodeArgs } from "./transcode";
+import { canRemux, chatRemuxArgs, chatTranscodeArgs, MAX_VIDEO_SECONDS, parseProbe, transcodeArgs } from "./transcode";
 
 describe("transcodeArgs", () => {
   it("drops sound, subtitles and metadata, and cuts at ten seconds", () => {
@@ -42,5 +42,40 @@ describe("chatTranscodeArgs", () => {
     assert.equal(after("-fpsmax"), "30");
     assert.equal(after("-protocol_whitelist"), "fd,pipe");
     assert.equal(after("-c:v"), "libsvtav1");
+  });
+});
+
+describe("chat video modes (GRYT-2159)", () => {
+  const at = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
+
+  it("sizes each re-encode mode", () => {
+    assert.match(at(chatTranscodeArgs("balanced"), "-vf"), /min\(1920,iw\)/);
+    assert.equal(at(chatTranscodeArgs("balanced"), "-fpsmax"), "60");
+    assert.match(at(chatTranscodeArgs("original"), "-vf"), /min\(2560,iw\)/);
+    assert.equal(at(chatTranscodeArgs("small"), "-fpsmax"), "30");
+  });
+
+  it("copies the video on a remux, and the audio only when every player takes it", () => {
+    const aac = chatRemuxArgs("aac");
+    assert.equal(at(aac, "-c:v"), "copy");
+    assert.equal(at(aac, "-c:a"), "copy");
+    assert.equal(at(aac, "-map_metadata"), "-1");
+    assert.equal(at(aac, "-protocol_whitelist"), "fd,pipe");
+    assert.equal(at(chatRemuxArgs("opus"), "-c:a"), "aac");
+  });
+
+  it("remuxes H.264, VP9 and AV1, and re-encodes the rest", () => {
+    assert.ok(canRemux("h264") && canRemux("vp9") && canRemux("av1"));
+    assert.ok(!canRemux("hevc") && !canRemux("vp8") && !canRemux(null));
+  });
+
+  it("reads the codecs off ffmpeg's stream mapping", () => {
+    const stderr = [
+      "Stream mapping:",
+      "  Stream #0:0 -> #0:0 (hevc (native) -> wrapped_avframe (native))",
+      "  Stream #0:1 -> #0:1 (aac (native) -> pcm_s16le (native))",
+    ].join("\n");
+    assert.deepEqual(parseProbe(stderr), { video: "hevc", audio: "aac" });
+    assert.deepEqual(parseProbe("  Stream #0:0 -> #0:0 (av1 (libdav1d) -> wrapped_avframe (native))"), { video: "av1", audio: null });
   });
 });

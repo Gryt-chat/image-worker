@@ -41,42 +41,105 @@ export function transcodeArgs(use: VideoUse): string[] {
   ];
 }
 
-/** A chat video keeps its shape and its sound, inside this box and at most 30 fps. */
-export const CHAT_VIDEO_MAX_SIDE = 1280;
+/** The server's "Video uploads" setting; the server keeps the same list in settings/chatVideoMode.ts. */
+export type ChatVideoMode = "original" | "balanced" | "small";
+
+const CHAT_ENCODE: Record<ChatVideoMode, { side: number; fps: number; crf: number; audioKbps: number }> = {
+  original: { side: 2560, fps: 60, crf: 30, audioKbps: 192 },
+  balanced: { side: 1920, fps: 60, crf: 32, audioKbps: 160 },
+  small: { side: 1280, fps: 30, crf: 38, audioKbps: 128 },
+};
+
+export const CHAT_VIDEO_MAX_SIDE = CHAT_ENCODE.small.side;
 export const CHAT_AUDIO_DECODERS = "aac,mp3,mp3float,opus,vorbis,flac,pcm_s16le,pcm_f32le";
 const CHAT_TRANSCODE_TIMEOUT_MS = 10 * 60_000;
+const PROBE_TIMEOUT_MS = 30_000;
+
+/** Codecs every browser and phone Gryt runs on can play from an MP4, so "original" copies them. */
+const REMUX_VIDEO = new Set(["h264", "vp9", "av1"]);
+const REMUX_AUDIO = new Set(["aac", "mp3"]);
+
+const INPUT = (logLevel: string, decoders: string): string[] => [
+  "-nostdin", "-hide_banner", "-loglevel", logLevel,
+  "-protocol_whitelist", "fd,pipe",
+  "-format_whitelist", FORMAT_WHITELIST,
+  "-codec_whitelist", decoders,
+  "-fd", "3", "-i", "fd:",
+];
+const STRIP = ["-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"];
+const FRAGMENTED_MP4 = ["-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"];
 
 /* Every frame scaled into the box, so a stream that changes size comes out one size; the
    first audio track, if there is one, as stereo AAC. Nothing else from the upload is kept. */
-export function chatTranscodeArgs(): string[] {
-  const side = CHAT_VIDEO_MAX_SIDE;
+export function chatTranscodeArgs(mode: ChatVideoMode = "small"): string[] {
+  const { side, fps, crf, audioKbps } = CHAT_ENCODE[mode];
   return [
-    "-nostdin", "-hide_banner", "-loglevel", "error",
     "-filter_threads", "1",
-    "-protocol_whitelist", "fd,pipe",
-    "-format_whitelist", FORMAT_WHITELIST,
-    "-codec_whitelist", `${CODEC_WHITELIST},${CHAT_AUDIO_DECODERS},libsvtav1,aac`,
-    "-fd", "3", "-i", "fd:",
-    "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn",
-    "-map_metadata", "-1", "-map_chapters", "-1",
+    ...INPUT("error", `${CODEC_WHITELIST},${CHAT_AUDIO_DECODERS},libsvtav1,aac`),
+    ...STRIP,
     "-vf", `scale=w='min(${side},iw)':h='min(${side},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,format=yuv420p`,
-    "-fpsmax", "30",
-    "-c:v", "libsvtav1", "-preset", "10", "-crf", "38", "-g", "240", "-svtav1-params", "lp=2",
-    "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000",
-    "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-    "-f", "mp4", "pipe:1",
+    "-fpsmax", String(fps),
+    "-c:v", "libsvtav1", "-preset", "10", "-crf", String(crf), "-g", "240", "-svtav1-params", "lp=2",
+    "-c:a", "aac", "-b:a", `${audioKbps}k`, "-ac", "2", "-ar", "48000",
+    ...FRAGMENTED_MP4,
   ];
+}
+
+/** Decodes the first second, which proves the streams open, and prints which codecs they are. */
+export function chatProbeArgs(): string[] {
+  return [
+    ...INPUT("info", `${CODEC_WHITELIST},${CHAT_AUDIO_DECODERS}`),
+    "-map", "0:v:0", "-map", "0:a:0?", "-t", "1", "-f", "null", "-",
+  ];
+}
+
+/** Reads ffmpeg's "Stream mapping" lines: output 0 is the video map, output 1 the audio. */
+export function parseProbe(stderr: string): { video: string | null; audio: string | null } {
+  const found: Record<string, string> = {};
+  for (const m of stderr.matchAll(/Stream #0:\d+ -> #0:(\d+) \((\w+) \(/g)) found[m[1]] = m[2];
+  return { video: found["0"] ?? null, audio: found["1"] ?? null };
+}
+
+/** The video stream as it was uploaded, in a new MP4, with metadata, chapters and extra tracks gone. */
+export function chatRemuxArgs(audio: string | null): string[] {
+  const audioArgs = audio === null || REMUX_AUDIO.has(audio)
+    ? ["-c:a", "copy"]
+    : ["-c:a", "aac", "-b:a", `${CHAT_ENCODE.original.audioKbps}k`, "-ac", "2", "-ar", "48000"];
+  return [
+    ...INPUT("error", `${CODEC_WHITELIST},${CHAT_AUDIO_DECODERS},aac`),
+    ...STRIP, "-c:v", "copy", ...audioArgs, ...FRAGMENTED_MP4,
+  ];
+}
+
+export function canRemux(video: string | null): boolean {
+  return video !== null && REMUX_VIDEO.has(video);
 }
 
 export type ChatTranscodeResult =
   | { ok: true; video: Buffer; poster: Buffer; width: number; height: number }
   | { ok: false; refused: boolean; reason: string };
 
-export async function transcodeChatVideo(inputPath: string, tools: FrameTools): Promise<ChatTranscodeResult> {
-  const command = frameCommand(tools, chatTranscodeArgs(), process.platform, TRANSCODE_MEMORY_BYTES, CHAT_TRANSCODE_TIMEOUT_MS);
+export async function transcodeChatVideo(
+  inputPath: string,
+  tools: FrameTools,
+  mode: ChatVideoMode = "small",
+  maxOutputBytes?: number,
+): Promise<ChatTranscodeResult> {
+  let args = chatTranscodeArgs(mode);
+  if (mode === "original") {
+    const probe = frameCommand(tools, chatProbeArgs(), process.platform, TRANSCODE_MEMORY_BYTES, PROBE_TIMEOUT_MS);
+    if ("missing" in probe) return { ok: false, refused: false, reason: probe.missing };
+    const probed = await run(probe.cmd, probe.argv, inputPath, PROBE_TIMEOUT_MS);
+    if (tools.jail && probed.code === JAIL_FAILED) return { ok: false, refused: false, reason: "the ffmpeg jail could not start" };
+    if (probed.timedOut || probed.code !== 0) return { ok: false, refused: true, reason: "the video could not be decoded" };
+    const { video, audio } = parseProbe(probed.stderr);
+    if (canRemux(video)) args = chatRemuxArgs(audio);
+  }
+
+  const command = frameCommand(tools, args, process.platform, TRANSCODE_MEMORY_BYTES, CHAT_TRANSCODE_TIMEOUT_MS);
   if ("missing" in command) return { ok: false, refused: false, reason: command.missing };
 
-  const result = await run(command.cmd, command.argv, inputPath, CHAT_TRANSCODE_TIMEOUT_MS);
+  const result = await run(command.cmd, command.argv, inputPath, CHAT_TRANSCODE_TIMEOUT_MS, maxOutputBytes);
   if (result.timedOut) return { ok: false, refused: true, reason: "the transcode ran out of time" };
   if (result.tooBig) return { ok: false, refused: true, reason: "the transcode came out over the size cap" };
   if (tools.jail && result.code === JAIL_FAILED) return { ok: false, refused: false, reason: "the ffmpeg jail could not start" };
