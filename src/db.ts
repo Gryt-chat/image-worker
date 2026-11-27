@@ -183,7 +183,7 @@ export function listFilesMissingDominantColor(limit: number): ColourlessFile[] {
     d
       .prepare(
         `SELECT file_id, s3_key, mime FROM files
-       WHERE dominant_color IS NULL AND mime LIKE 'image/%'
+       WHERE dominant_color IS NULL AND mime LIKE 'image/%' AND s3_key NOT LIKE 'quarantine/%'
        ORDER BY created_at DESC LIMIT ?`,
       )
       .all(safeLimit),
